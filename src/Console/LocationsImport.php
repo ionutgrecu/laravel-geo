@@ -13,6 +13,6 @@ class LocationsImport extends Command {
     }
 
     public function handle() {
-        return 0;
+        return self::SUCCESS;
     }
 }
