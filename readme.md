@@ -8,20 +8,17 @@
 `composer require ionutgrecu/laravel-geo`
 
 ## Usage
-Write a few lines about the usage of this package.
+This package facilitates the creation of geo models and migrations. Model relationships are established using codes to ensure compatibility across various systems utilizing this package. When referencing models in your code, always use their codes instead of their IDs.
 
-## Testing
-Run the tests with:
+Additionally, you can import specific regions or all available regions into the database as needed.
 
-``` bash
-vendor/bin/phpunit
+``` code
+php artisan geo:import-regions {regions? : Comma separated list of regions to import. Ex.: eu,na. Default: all regions.} {--c|countries : Import countries.}
 ```
 
-## Changelog
-Please see [CHANGELOG](CHANGELOG.md) for more information what has changed recently.
-
-## Contributing
-Please see [CONTRIBUTING](CONTRIBUTING.md) for details.
+## Todo
+- [ ] Add support for importing cities
+- [ ] Further develop the GeoService class
 
 ## Credits
 

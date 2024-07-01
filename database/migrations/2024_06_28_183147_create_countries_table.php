@@ -18,18 +18,20 @@ class CreateCountriesTable extends Migration {
         if (!Schema::connection($this->connection)->hasTable($this->table))
             Schema::connection($this->connection)->create($this->table, function (Blueprint $table) {
                 $table->id();
-                $table->string('region_iso2', 2);
-                $table->string('name', 64)->unique();
+                $table->string('region_code', 2);
+                $table->string('name', 64)->unique()->comment("Name in local language");
+                $table->string('name_int', 64)->comment("Name in English");
+                $table->string('code', 2)->unique()->comment('ISO2');
                 $table->string('iso2', 2)->unique();
                 $table->string('iso3', 3)->unique();
                 $table->string('iso_numeric', 3)->unique();
+                $table->string('wiki_data_id', 16)->nullable();
                 $table->string('phone_code', 8)->nullable();
-                $table->string('capital', 64)->nullable();
                 $table->string('currency', 8)->nullable();
-                $table->string('language', 5)->nullable();
+                $table->text('languages')->nullable();
                 $table->timestamps();
 
-                $table->foreign('region_iso2')->references('iso2')->on((new Region())->getTable())->onUpdate('cascade')->onDelete('cascade');
+                $table->foreign('region_code')->references('code')->on((new Region())->getTable())->onUpdate('cascade')->onDelete('cascade');
             });
     }
 

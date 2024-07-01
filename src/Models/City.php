@@ -17,10 +17,14 @@ use Illuminate\Database\Eloquent\Model;
  */
 class City extends Model {
     protected $guarded = ['id', 'created_at'];
-    
+
     public function __construct(array $attributes = []) {
         $this->setConnection(config('geo.database_connection'));
         $this->setTable(config('geo.table_prefix') . 'cities');
         parent::__construct($attributes);
+    }
+
+    function county(): BelongsTo {
+        return $this->belongsTo(County::class, 'county_id', 'id');
     }
 }
