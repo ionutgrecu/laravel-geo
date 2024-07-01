@@ -18,12 +18,14 @@ class CreateCountiesTable extends Migration {
         if (!Schema::connection($this->connection)->hasTable($this->table))
             Schema::connection($this->connection)->create($this->table, function (Blueprint $table) {
                 $table->id();
-                $table->string('country_iso2', 2);
-                $table->string('name', 64)->unique();
-                $table->string('iso_code', 4)->unique();
+                $table->string('country_code', 2);
+                $table->string('code', 10)->unique();
+                $table->string('name', 64)->index();
+                $table->string('fips', 10);
+                $table->string('wiki_data_id', 16)->nullable();
                 $table->timestamps();
 
-                $table->foreign('country_iso2')->references('iso2')->on((new Country())->getTable())->onUpdate('cascade')->onDelete('cascade');
+                $table->foreign('country_code')->references('code')->on((new Country())->getTable())->onUpdate('cascade')->onDelete('cascade');
             });
     }
 

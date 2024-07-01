@@ -18,7 +18,9 @@ class CreateRegionsTable extends Migration {
             Schema::connection($this->connection)->create($this->table, function (Blueprint $table) {
                 $table->id();
                 $table->string('name', 32)->unique();
+                $table->string('code', 2)->comment('ISO2')->unique();
                 $table->string('iso2', 2)->unique();
+                $table->string('wiki_data_id', 16)->nullable();
                 $table->timestamps();
             });
     }
