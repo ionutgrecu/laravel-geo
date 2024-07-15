@@ -3,6 +3,7 @@
 namespace Ionutgrecu\LaravelGeo\Console;
 
 use Illuminate\Console\Command;
+use Ionutgrecu\LaravelGeo\Models\County;
 use Ionutgrecu\LaravelGeo\Models\Region;
 use Ionutgrecu\LaravelGeo\Services\GeoService;
 use Ionutgrecu\LaravelGeo\Services\JsonLocationsService;
@@ -33,7 +34,7 @@ class LocationsImport extends Command {
     }
 
     protected function importCountriesForRegion(Region $region) {
-        $countries=$this->jsonLocationsService->getCountries($region->code);
+        $countries = $this->jsonLocationsService->getCountries($region->code);
         foreach ($countries as $country) {
             $countryModel = $this->geoService->importCountry($country);
             $this->info("Imported country {$countryModel->name} ({$countryModel->code})");
@@ -42,18 +43,16 @@ class LocationsImport extends Command {
     }
 
     protected function importCountiesForCountry(array $country) {
-        $counties=$this->jsonLocationsService->getCounties($country['code']);
+        $counties = $this->jsonLocationsService->getCounties($country['code']);
         foreach ($counties as $county) {
-            $stateModel = $this->geoService->importCounty($county);
-            $this->info("Imported county {$stateModel->name} ({$stateModel->code})");
-//            $this->importCitiesForCounty($state);
+            $countyModel = $this->geoService->importCounty($county);
+            $this->info("Imported county {$countyModel->name} ({$countyModel->code})");
         }
+
+//        $this->importCitiesForCounty($countyModel);
     }
 
-    protected function importCitiesForCounty(State $state) {
-        foreach ($state->getCities()->getIterator() as $city) {
-            $cityModel = $this->geoService->importCity($city);
-            $this->info("Imported city {$cityModel->name} ({$cityModel->iso2})");
-        }
+    protected function importCitiesForCounty(County $state) {
+
     }
 }
