@@ -2,6 +2,7 @@
 
 namespace Ionutgrecu\LaravelGeo\Models;
 
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 
 /**
@@ -22,6 +23,12 @@ class City extends Model {
         $this->setConnection(config('geo.database_connection'));
         $this->setTable(config('geo.table_prefix') . 'cities');
         parent::__construct($attributes);
+    }
+
+    protected static function booted() {
+        static::addGlobalScope('withCounty', function (Builder $builder) {
+            $builder->with('county');
+        });
     }
 
     function county(): BelongsTo {

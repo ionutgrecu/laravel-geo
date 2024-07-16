@@ -2,6 +2,7 @@
 
 namespace Ionutgrecu\LaravelGeo\Models;
 
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
@@ -26,6 +27,12 @@ class County extends Model {
         $this->setConnection(config('geo.database_connection'));
         $this->setTable(config('geo.table_prefix') . 'counties');
         parent::__construct($attributes);
+    }
+
+    protected static function booted() {
+        static::addGlobalScope('withCountry', function (Builder $builder) {
+            $builder->with('country');
+        });
     }
 
     function country(): BelongsTo {
