@@ -7,6 +7,7 @@ use Ionutgrecu\LaravelGeo\Models\City;
 use Ionutgrecu\LaravelGeo\Models\Country;
 use Ionutgrecu\LaravelGeo\Models\County;
 use Ionutgrecu\LaravelGeo\Models\Region;
+use Websea\Iqapp\Helpers\iq;
 
 /**
  * Class GeoService
@@ -98,6 +99,14 @@ class GeoService {
         ]);
 
         return $cityModel;
+    }
+
+    function getRegions(): Collection {
+        return Region::all();
+    }
+
+    function getCountries(): Collection {
+        return Country::all();
     }
 
     function getLocationsTree(): Collection {
