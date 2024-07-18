@@ -2,6 +2,7 @@
 
 namespace Ionutgrecu\LaravelGeo\Models;
 
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use function config;
@@ -24,6 +25,17 @@ class Region extends Model {
         $this->setConnection(config('geo.database_connection'));
         $this->setTable(config('geo.table_prefix') . 'regions');
         parent::__construct($attributes);
+    }
+
+    static function setFavorite(?string $code) {
+        if ($code)
+            static::addGlobalScope('withFavorite', function (Builder $builder) use ($code) {
+                $builder->orderByRaw("`code` = '$code' DESC")->orderBy('name');
+            });
+        else
+            static::addGlobalScope('withFavorite', function (Builder $builder) use ($code) {
+                $builder->orderBy('name');
+            });
     }
 
     function countries(): HasMany {

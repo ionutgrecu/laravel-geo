@@ -45,6 +45,17 @@ class Country extends Model {
         });
     }
 
+    static function setFavorite(?string $code) {
+        if ($code)
+            static::addGlobalScope('withFavorite', function (Builder $builder) use ($code) {
+                $builder->orderByRaw("`code` = '$code' DESC")->orderBy('name');
+            });
+        else
+            static::addGlobalScope('withFavorite', function (Builder $builder) use ($code) {
+                $builder->orderBy('name');
+            });
+    }
+
     function region(): BelongsTo {
         return $this->belongsTo(Region::class, 'region_code', 'code');
     }
