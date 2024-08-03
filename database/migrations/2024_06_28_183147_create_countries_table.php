@@ -20,7 +20,7 @@ class CreateCountriesTable extends Migration {
                 $table->id();
                 $table->string('region_code', 2);
                 $table->string('name', 64)->unique()->comment("Name in local language");
-                $table->string('name_int', 64)->comment("Name in English");
+                $table->string('name_int', 64)->index()->comment("Name in English");
                 $table->string('code', 2)->unique()->comment('ISO2');
                 $table->string('iso2', 2)->unique();
                 $table->string('iso3', 3)->unique();
