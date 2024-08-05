@@ -117,6 +117,15 @@ class GeoService {
 
         return $countryQueryBuilder->get();
     }
+    
+    function getCounties(string $countryCode, bool $includeCities = false): Collection {
+        $countyQueryBuilder = County::query()->where('country_code', $countryCode);
+
+        if ($includeCities)
+            $countyQueryBuilder->with('cities');
+
+        return $countyQueryBuilder->get();
+    }
 
     function getLocationsTree(): Collection {
         return Region::with('countries', 'countries.counties')->get();
