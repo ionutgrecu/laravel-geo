@@ -4,6 +4,7 @@ namespace Ionutgrecu\LaravelGeo\Models;
 
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
+use Ionutgrecu\LaravelGeo\Builders\CityQueryBuilder;
 
 /**
  * Class City
@@ -33,5 +34,9 @@ class City extends Model {
 
     function county(): BelongsTo {
         return $this->belongsTo(County::class, 'county_id', 'id');
+    }
+
+    public function newEloquentBuilder($query) {
+        return new CityQueryBuilder($query);
     }
 }

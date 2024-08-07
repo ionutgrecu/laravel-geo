@@ -6,6 +6,7 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Ionutgrecu\LaravelGeo\Builders\CountyQueryBuilder;
 use function config;
 
 /**
@@ -22,6 +23,10 @@ use function config;
  */
 class County extends Model {
     protected $guarded = ['id', 'created_at'];
+
+    public function newEloquentBuilder($query) {
+        return new CountyQueryBuilder($query);
+    }
 
     public function __construct(array $attributes = []) {
         $this->setConnection(config('geo.database_connection'));

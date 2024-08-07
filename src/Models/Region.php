@@ -5,6 +5,7 @@ namespace Ionutgrecu\LaravelGeo\Models;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Ionutgrecu\LaravelGeo\Builders\RegionQueryBuilder;
 use function config;
 
 /**
@@ -25,6 +26,10 @@ class Region extends Model {
         $this->setConnection(config('geo.database_connection'));
         $this->setTable(config('geo.table_prefix') . 'regions');
         parent::__construct($attributes);
+    }
+
+    function newEloquentBuilder($query) {
+        return new RegionQueryBuilder($query);
     }
 
     static function setFavorite(?string $code) {
