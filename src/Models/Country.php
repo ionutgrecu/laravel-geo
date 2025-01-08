@@ -6,6 +6,7 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Ionutgrecu\LaravelGeo\Builders\CountryQueryBuilder;
 use function config;
 
 /**
@@ -43,6 +44,10 @@ class Country extends Model {
         static::addGlobalScope('withRegion', function (Builder $builder) {
             $builder->with('region');
         });
+    }
+
+    function newEloquentBuilder($query) {
+        return new CountryQueryBuilder($query);
     }
 
     static function setFavorite(?string $code) {

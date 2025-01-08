@@ -117,9 +117,9 @@ class GeoService {
 
         return $countryQueryBuilder->get();
     }
-    
+
     function getCounties(string $countryCode, bool $includeCities = false): Collection {
-        $countyQueryBuilder = County::query()->where('country_code', $countryCode);
+        $countyQueryBuilder = County::query()->where('country_code', $countryCode)->orderBy('name', 'ASC');
 
         if ($includeCities)
             $countyQueryBuilder->with('cities');
