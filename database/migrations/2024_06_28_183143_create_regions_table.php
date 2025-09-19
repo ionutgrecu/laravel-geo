@@ -16,7 +16,7 @@ class CreateRegionsTable extends Migration {
     public function up() {
         if (!Schema::connection($this->connection)->hasTable($this->table))
             Schema::connection($this->connection)->create($this->table, function (Blueprint $table) {
-                $table->id();
+                $table->mediumIncrements('id')->unsigned();
                 $table->string('name', 32)->unique();
                 $table->string('code', 2)->comment('ISO2')->unique();
                 $table->string('iso2', 2)->unique();
