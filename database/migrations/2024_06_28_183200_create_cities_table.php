@@ -17,7 +17,7 @@ class CreateCitiesTable extends Migration {
     public function up() {
         if (!Schema::connection($this->connection)->hasTable($this->table))
             Schema::connection($this->connection)->create($this->table, function (Blueprint $table) {
-                $table->id();
+                $table->integerIncrements('id')->unsigned();
                 $table->string('county_code', 10);
                 $table->string('code', 10)->unique();
                 $table->string('name', 64)->index();

@@ -30,7 +30,7 @@ class LocationsImport extends Command {
                 $this->importCountriesForRegion($regionModel);
         }
 
-        return self::SUCCESS;
+        return 0;
     }
 
     protected function importCountriesForRegion(Region $region) {

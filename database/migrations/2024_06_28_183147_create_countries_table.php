@@ -17,7 +17,7 @@ class CreateCountriesTable extends Migration {
     public function up() {
         if (!Schema::connection($this->connection)->hasTable($this->table))
             Schema::connection($this->connection)->create($this->table, function (Blueprint $table) {
-                $table->id();
+                $table->mediumIncrements('id')->unsigned();
                 $table->string('region_code', 2);
                 $table->string('name', 64)->unique()->comment("Name in local language");
                 $table->string('name_int', 64)->index()->comment("Name in English");
