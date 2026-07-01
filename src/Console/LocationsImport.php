@@ -3,14 +3,13 @@
 namespace Ionutgrecu\LaravelGeo\Console;
 
 use Illuminate\Console\Command;
-use Ionutgrecu\LaravelGeo\Models\County;
 use Ionutgrecu\LaravelGeo\Models\Region;
 use Ionutgrecu\LaravelGeo\Services\GeoService;
 use Ionutgrecu\LaravelGeo\Services\JsonLocationsService;
 use function explode;
 
 class LocationsImport extends Command {
-    protected $signature   = 'geo:import-regions {regions? : Comma separated list of regions to import. Ex.: eu,na. Default: all regions.} {--c|countries : Import countries.}';
+    protected $signature   = 'geo:import-regions {regions? : Comma separated list of regions to import. Ex.: eu,na. Default: all regions.} {--c|countries : Import countries and counties.} {--C|cities : Import cities.}';
     protected $description = 'Import regions to the database.';
 
     protected JsonLocationsService $jsonLocationsService;
@@ -39,6 +38,9 @@ class LocationsImport extends Command {
             $countryModel = $this->geoService->importCountry($country);
             $this->info("Imported country {$countryModel->name} ({$countryModel->code})");
             $this->importCountiesForCountry($country);
+
+            if ($this->option('cities'))
+                $this->importCitiesForCountry($country);
         }
     }
 
@@ -48,11 +50,31 @@ class LocationsImport extends Command {
             $countyModel = $this->geoService->importCounty($county);
             $this->info("Imported county {$countyModel->name} ({$countyModel->code})");
         }
-
-//        $this->importCitiesForCounty($countyModel);
     }
 
-    protected function importCitiesForCounty(County $state) {
+    protected function importCitiesForCountry(array $country): void {
+        $cities = $this->jsonLocationsService->getCities($country['code']);
 
+        if (empty($cities)) {
+            $this->warn("No city data found for country {$country['code']}");
+            return;
+        }
+
+        $bar = $this->output->createProgressBar(count($cities));
+        $bar->start();
+
+        foreach ($cities as $city) {
+            try {
+                $this->geoService->importCity($city);
+            }catch(\Exception $e){
+                $this->error('Missing county '.$city['countyCode']);
+            }
+
+            $bar->advance();
+        }
+
+        $bar->finish();
+        $this->newLine();
+        $this->info("Imported " . count($cities) . " cities for country {$country['code']}");
     }
 }
