@@ -104,6 +104,7 @@ class GeoService {
             'type'         => $city['type'] ?? null,
             'place_rank'   => $city['placeRank'] ?? null,
             'place_id'     => $city['placeId'] ?? null,
+            'polygon'      => $city['polygon'] ?? null,
         ]);
         $cityModel->save();
 
@@ -323,12 +324,9 @@ class GeoService {
                 $results = $this->nominatimService->nominatimDetailsByPlaceId($city->place_id);
                 foreach ($results as $result) {
                     $data = $this->nominatimService->parseNeighborhoodResult($result, $cityCode);
-                    if (empty($data['name'])) continue;
+                    if (empty($data['name']) || empty($data['code'])) continue;
 
-                    $neighborhood = Neighborhood::firstOrNew([
-                        'city_code' => $cityCode,
-                        'name'      => $data['name'],
-                    ]);
+                    $neighborhood = Neighborhood::firstOrNew(['code' => $data['code']]);
                     $neighborhood->fill($data)->save();
                 }
                 return;
@@ -341,15 +339,12 @@ class GeoService {
                     (float) $city->longitude
                 );
             }
-
+dd($elements);
             foreach ($elements as $element) {
                 $data = $this->nominatimService->parseOverpassNeighborhoodElement($element, $cityCode);
-                if (empty($data['name'])) continue;
+                if (empty($data['name']) || empty($data['code'])) continue;
 
-                $neighborhood = Neighborhood::firstOrNew([
-                    'city_code' => $cityCode,
-                    'name'      => $data['name'],
-                ]);
+                $neighborhood = Neighborhood::firstOrNew(['code' => $data['code']]);
                 $neighborhood->fill($data)->save();
             }
         } catch (\Throwable $e) {

@@ -19,7 +19,9 @@ use Ionutgrecu\LaravelGeo\Builders\CityQueryBuilder;
  * @property string wiki_data_id
  * @property string type
  * @property int place_rank
+ * @property int|null population
  * @property string place_id
+ * @property string polygon
  * @property string created_at
  * @property string updated_at
  */

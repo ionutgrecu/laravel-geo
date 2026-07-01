@@ -106,8 +106,9 @@ class NominatimService {
 
     public function searchCities(string $countryCode, ?string $countyName = null, ?array $boundingBox = null): array {
         $params = [
-            'countrycodes' => strtolower($countryCode),
-            'limit'        => 40,
+            'countrycodes'   => strtolower($countryCode),
+            'limit'          => 40,
+            'polygon_geojson' => 1,
         ];
 
         if ($boundingBox) {
@@ -168,7 +169,7 @@ class NominatimService {
             . 'way["place"~"suburb|neighbourhood|quarter|hamlet"](area.searchArea);'
             . 'relation["place"~"suburb|neighbourhood|quarter|hamlet"](area.searchArea);'
             . ');'
-            . 'out tags center;';
+            . 'out geom center;';
 
         try {
             $this->throttle();
@@ -216,8 +217,9 @@ class NominatimService {
 
         $params = [
             'viewbox' => ($lon - $delta) . ',' . ($lat - $delta) . ',' . ($lon + $delta) . ',' . ($lat + $delta),
-            'bounded' => 1,
-            'limit'   => 40,
+            'bounded'         => 1,
+            'limit'            => 40,
+            'polygon_geojson'  => 1,
         ];
 
         $results = $this->request('/search', $params);
@@ -238,9 +240,9 @@ class NominatimService {
         $overpassTimeout = config('geo.overpass.timeout', 60);
 
         if ($countyIsoCode) {
-            $areaFilter = 'area["ISO3166-2"="' . $countyIsoCode . '"]->.searchArea;';
+            $areaFilter = 'area["ISO3166-2"="' . $countyIsoCode . '"]["boundary"="administrative"]->.searchArea;';
         } else {
-            $areaFilter = 'area["ISO3166-1"="' . strtoupper($countryCode) . '"]->.searchArea;';
+            $areaFilter = 'area["ISO3166-1"="' . strtoupper($countryCode) . '"]["boundary"="administrative"]->.searchArea;';
         }
 
         $query = '[out:json][timeout:' . $overpassTimeout . '];'
@@ -250,8 +252,8 @@ class NominatimService {
             . 'way["place"~"city|town|village"](area.searchArea);'
             . 'relation["place"~"city|town|village"](area.searchArea);'
             . ');'
-            . 'out tags;';
-
+            . 'out geom center tags;';
+dump($query);
         try {
             $this->throttle();
             $response = (new Client())->post($overpassUrl, [
@@ -283,8 +285,8 @@ class NominatimService {
             . 'way["place"~"suburb|neighbourhood|quarter|hamlet"](' . $bbox . ');'
             . 'relation["place"~"suburb|neighbourhood|quarter|hamlet"](' . $bbox . ');'
             . ');'
-            . 'out tags center;';
-
+            . 'out geom center;';
+dd($query);
         try {
             $this->throttle();
             $response = (new Client())->post($overpassUrl, [
@@ -351,12 +353,11 @@ class NominatimService {
         $name = $address['city'] ?? $address['town'] ?? $address['village'] ?? $result['name'] ?? null;
 
         $wikiDataId = $extratags['wikidata'] ?? null;
-        $code       = $wikiDataId;
-        if (!$code) {
-            $osmType = $result['osm_type'] ?? '';
-            $osmId    = $result['osm_id'] ?? '';
-            $code     = strtoupper(substr($osmType, 0, 1)) . $osmId;
-        }
+
+        // Nominatim Lookup format: OSM object ID prefixed with N (node), W (way), or R (relation).
+        $osmType = $result['osm_type'] ?? '';
+        $osmId   = $result['osm_id'] ?? '';
+        $code    = strtoupper(substr($osmType, 0, 1)) . $osmId;
 
         return array_filter([
             'code'         => $code,
@@ -367,17 +368,31 @@ class NominatimService {
             'wiki_data_id' => $wikiDataId,
             'type'         => $result['addresstype'] ?? $result['type'] ?? null,
             'place_rank'   => $result['place_rank'] ?? null,
+            'population'   => isset($extratags['population']) ? (int) $extratags['population'] : null,
             'place_id'     => $result['place_id'] ?? null,
+            'polygon'      => isset($result['geojson']) ? json_encode($result['geojson']) : null,
         ], fn($value) => $value !== null && $value !== '');
     }
 
     public function parseNeighborhoodResult(array $result, string $cityCode): array {
         $extratags = $result['extratags'] ?? [];
 
+        $wikiDataId = $extratags['wikidata'] ?? null;
+        $code       = $wikiDataId;
+        if (!$code) {
+            $osmType = $result['osm_type'] ?? '';
+            $osmId    = $result['osm_id'] ?? '';
+            $code     = strtoupper(substr($osmType, 0, 1)) . $osmId;
+        }
+
         return array_filter([
             'city_code'    => $cityCode,
+            'code'         => $code,
             'name'         => $result['name'] ?? null,
-            'wiki_data_id' => $extratags['wikidata'] ?? null,
+            'wiki_data_id' => $wikiDataId,
+            'latitude'     => $result['lat'] ?? null,
+            'longitude'    => $result['lon'] ?? null,
+            'polygon'      => isset($result['geojson']) ? json_encode($result['geojson']) : null,
         ], fn($value) => $value !== null && $value !== '');
     }
 
@@ -391,12 +406,11 @@ class NominatimService {
         if (!$name) return [];
 
         $wikiDataId = $tags['wikidata'] ?? null;
-        $code       = $wikiDataId;
-        if (!$code) {
-            $osmType = $element['type'] ?? '';
-            $osmId    = (string) ($element['id'] ?? '');
-            $code     = strtoupper(substr($osmType, 0, 1)) . $osmId;
-        }
+
+        // Nominatim Lookup format: OSM object ID prefixed with N (node), W (way), or R (relation).
+        $osmType = $element['type'] ?? '';
+        $osmId   = (string) ($element['id'] ?? '');
+        $code    = strtoupper(substr($osmType, 0, 1)) . $osmId;
 
         $lat = $element['lat'] ?? $element['center']['lat'] ?? $tags['lat'] ?? null;
         $lon = $element['lon'] ?? $element['center']['lon'] ?? $tags['lon'] ?? null;
@@ -409,6 +423,8 @@ class NominatimService {
             default   => null,
         };
 
+        $geojson = $this->convertOverpassGeometryToGeoJSON($element);
+
         return array_filter([
             'code'         => $code,
             'county_code'  => $countyCode,
@@ -418,6 +434,8 @@ class NominatimService {
             'wiki_data_id' => $wikiDataId,
             'type'         => $placeType,
             'place_rank'   => $placeRank,
+            'population'   => isset($tags['population']) ? (int) $tags['population'] : null,
+            'polygon'      => $geojson ? json_encode($geojson) : null,
         ], fn($value) => $value !== null && $value !== '');
     }
 
@@ -430,11 +448,90 @@ class NominatimService {
 
         if (!$name) return [];
 
+        $wikiDataId = $tags['wikidata'] ?? null;
+        $code       = $wikiDataId;
+        if (!$code) {
+            $osmType = $element['type'] ?? '';
+            $osmId    = (string) ($element['id'] ?? '');
+            $code     = strtoupper(substr($osmType, 0, 1)) . $osmId;
+        }
+
+        $lat = $element['lat'] ?? $element['center']['lat'] ?? null;
+        $lon = $element['lon'] ?? $element['center']['lon'] ?? null;
+
+        $geojson = $this->convertOverpassGeometryToGeoJSON($element);
+
         return array_filter([
             'city_code'    => $cityCode,
+            'code'         => $code,
             'name'         => $name,
-            'wiki_data_id' => $tags['wikidata'] ?? null,
+            'wiki_data_id' => $wikiDataId,
+            'latitude'     => $lat,
+            'longitude'    => $lon,
+            'polygon'      => $geojson ? json_encode($geojson) : null,
         ], fn($value) => $value !== null && $value !== '');
+    }
+
+    /**
+     * Convert Overpass API element geometry to GeoJSON format.
+     * Handles nodes (Point), ways (Polygon if closed), and relations (MultiPolygon from outer members).
+     */
+    public function convertOverpassGeometryToGeoJSON(array $element): ?array {
+        $type = $element['type'] ?? '';
+
+        // Node → Point
+        if ($type === 'node') {
+            $lat = $element['lat'] ?? null;
+            $lon = $element['lon'] ?? null;
+            if ($lat === null || $lon === null) return null;
+
+            return ['type' => 'Point', 'coordinates' => [(float) $lon, (float) $lat]];
+        }
+
+        // Way → Polygon (if closed ring) or LineString
+        if ($type === 'way') {
+            $geometry = $element['geometry'] ?? [];
+            if (empty($geometry)) return null;
+
+            $coordinates = array_map(fn($p) => [(float) ($p['lon'] ?? 0), (float) ($p['lat'] ?? 0)], $geometry);
+
+            // Closed way → Polygon
+            $first = $coordinates[0] ?? null;
+            $last  = $coordinates[count($coordinates) - 1] ?? null;
+            if ($first && $last && $first[0] === $last[0] && $first[1] === $last[1] && count($coordinates) >= 4) {
+                return ['type' => 'Polygon', 'coordinates' => [$coordinates]];
+            }
+
+            // Open way → LineString (not a boundary, but still useful)
+            return ['type' => 'LineString', 'coordinates' => $coordinates];
+        }
+
+        // Relation → MultiPolygon (assemble from outer member ways)
+        if ($type === 'relation') {
+            $members = $element['members'] ?? [];
+            $outerRings = [];
+
+            foreach ($members as $member) {
+                if (($member['role'] ?? '') !== 'outer') continue;
+                $memberGeometry = $member['geometry'] ?? [];
+                if (empty($memberGeometry)) continue;
+
+                $coordinates = array_map(fn($p) => [(float) ($p['lon'] ?? 0), (float) ($p['lat'] ?? 0)], $memberGeometry);
+                if (count($coordinates) >= 4) {
+                    $outerRings[] = $coordinates;
+                }
+            }
+
+            if (empty($outerRings)) return null;
+
+            if (count($outerRings) === 1) {
+                return ['type' => 'Polygon', 'coordinates' => $outerRings];
+            }
+
+            return ['type' => 'MultiPolygon', 'coordinates' => array_map(fn($ring) => [$ring], $outerRings)];
+        }
+
+        return null;
     }
 
     protected function getCountriesForRegion(string $regionCode): array {
