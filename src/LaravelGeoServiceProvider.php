@@ -4,6 +4,7 @@ namespace Ionutgrecu\LaravelGeo;
 
 use Illuminate\Support\ServiceProvider;
 use Ionutgrecu\LaravelGeo\Console\LocationsImport;
+use Ionutgrecu\LaravelGeo\Services\NominatimService;
 
 class LaravelGeoServiceProvider extends ServiceProvider {
     public function register() {
@@ -15,6 +16,10 @@ class LaravelGeoServiceProvider extends ServiceProvider {
             return new LocationsImport();
         });
         $this->commands('locations.import');
+
+        $this->app->singleton(NominatimService::class, function ($app) {
+            return new NominatimService();
+        });
     }
 
     public function boot() {
