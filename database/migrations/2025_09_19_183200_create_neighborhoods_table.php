@@ -27,7 +27,7 @@ class CreateNeighborhoodsTable extends Migration {
                 $table->longText('polygon')->nullable();
                 $table->timestamps();
 
-                $table->foreign('city_id')->references('id')->on((new City())->getTable())->onUpdate('cascade')->onDelete('cascade');
+                $table->foreign('city_code')->references('code')->on((new City())->getTable())->onUpdate('cascade')->onDelete('cascade');
             });
     }
 
