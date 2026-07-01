@@ -18,8 +18,13 @@ class CreateNeighborhoodsTable extends Migration {
         if (!Schema::connection($this->connection)->hasTable($this->table))
             Schema::connection($this->connection)->create($this->table, function (Blueprint $table) {
                 $table->bigIncrements('id')->unsigned();
-                $table->integer('city_id')->unsigned();
+                $table->string('city_code', 10);
+                $table->string('code', 16)->unique();
                 $table->string('name', 64)->index();
+                $table->string('wiki_data_id', 16)->nullable();
+                $table->string('latitude', 32)->nullable();
+                $table->string('longitude', 32)->nullable();
+                $table->longText('polygon')->nullable();
                 $table->timestamps();
 
                 $table->foreign('city_id')->references('id')->on((new City())->getTable())->onUpdate('cascade')->onDelete('cascade');
