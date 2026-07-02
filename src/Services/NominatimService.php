@@ -158,6 +158,67 @@ class NominatimService {
         return null;
     }
 
+    public function overpassCityBoundaryByWikiDataId(string $wikiDataId): ?array {
+        $overpassUrl     = config('geo.overpass.base_url', 'https://overpass-api.de/api/interpreter');
+        $overpassTimeout = config('geo.overpass.timeout', 60);
+
+        $query = '[out:json][timeout:' . $overpassTimeout . '];'
+            . 'relation["wikidata"="' . $wikiDataId . '"]["boundary"="administrative"];'
+            . 'out geom;';
+
+        $element = $this->overpassFirstElement($overpassUrl, $overpassTimeout, $query, 'city boundary by wikidata');
+        return $element ? $this->convertOverpassGeometryToGeoJSON($element) : null;
+    }
+
+    public function overpassCityBoundaryByName(string $name, string $countryCode, ?string $countyIsoCode = null): ?array {
+        $overpassUrl     = config('geo.overpass.base_url', 'https://overpass-api.de/api/interpreter');
+        $overpassTimeout = config('geo.overpass.timeout', 60);
+
+        if ($countyIsoCode) {
+            $areaFilter = 'area["ISO3166-2"="' . $countyIsoCode . '"]["boundary"="administrative"]->.searchArea;';
+        } else {
+            $areaFilter = 'area["ISO3166-1"="' . strtoupper($countryCode) . '"]["boundary"="administrative"]->.searchArea;';
+        }
+
+        $query = '[out:json][timeout:' . $overpassTimeout . '];'
+            . $areaFilter
+            . 'relation["boundary"="administrative"]["name"="' . $this->escapeOverpassString($name) . '"](area.searchArea);'
+            . 'out geom;';
+
+        $element = $this->overpassFirstElement($overpassUrl, $overpassTimeout, $query, 'city boundary by name');
+        return $element ? $this->convertOverpassGeometryToGeoJSON($element) : null;
+    }
+
+    public function polygonIsPoint(?string $polygon): bool {
+        if ($polygon === null || $polygon === '') return true;
+        $decoded = json_decode($polygon, true);
+        return !is_array($decoded) || ($decoded['type'] ?? '') === 'Point';
+    }
+
+    protected function overpassFirstElement(string $overpassUrl, int $overpassTimeout, string $query, string $context): ?array {
+        try {
+            $this->throttle();
+            $response = (new Client())->post($overpassUrl, [
+                'form_params' => ['data' => $query],
+                'timeout'     => $overpassTimeout,
+                'headers'     => ['User-Agent' => $this->userAgent],
+            ]);
+
+            self::$lastRequestTime = microtime(true);
+            $data     = json_decode($response->getBody()->getContents(), true);
+            $elements = $data['elements'] ?? [];
+            return $elements[0] ?? null;
+        } catch (GuzzleException $e) {
+            Log::warning('Overpass API request failed for ' . $context . ': ' . $e->getMessage());
+            self::$lastRequestTime = microtime(true);
+            return null;
+        }
+    }
+
+    protected function escapeOverpassString(string $value): string {
+        return str_replace(['\\', '"'], ['\\\\', '\\"'], $value);
+    }
+
     public function overpassNeighborhoodsByWikiDataId(string $wikiDataId): array {
         $overpassUrl = config('geo.overpass.base_url', 'https://overpass-api.de/api/interpreter');
         $overpassTimeout = config('geo.overpass.timeout', 60);
@@ -253,7 +314,7 @@ class NominatimService {
             . 'relation["place"~"city|town|village"](area.searchArea);'
             . ');'
             . 'out geom center tags;';
-dump($query);
+        dd($query);
         try {
             $this->throttle();
             $response = (new Client())->post($overpassUrl, [

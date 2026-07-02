@@ -278,6 +278,8 @@ class GeoService {
                     $data = $this->nominatimService->parseOverpassCityElement($element, $countyCode);
                     if (empty($data['name']) || empty($data['code'])) continue;
 
+                    $data = $this->enrichCityBoundaryPolygon($data, $resolvedCountryCode, $countyCode);
+
                     $city = City::firstOrNew(['code' => $data['code']]);
                     $city->fill($data)->save();
                 }
@@ -299,12 +301,43 @@ class GeoService {
                 $code = $data['code'] ?? null;
                 if (!$code) continue;
 
+                $data = $this->enrichCityBoundaryPolygon($data, $resolvedCountryCode, $countyCode);
+
                 $city = City::firstOrNew(['code' => $code]);
                 $city->fill($data)->save();
             }
         } catch (\Throwable $e) {
             Log::warning("Nominatim fetch failed for cities: " . $e->getMessage());
         }
+    }
+
+    /**
+     * When a city was parsed as a Point (or with no geometry), attempt to fetch
+     * its real administrative boundary polygon via Overpass — first by wikidata
+     * ID, then by name within the county/country area. Leaves the polygon as-is
+     * when a real polygon was already parsed (way/relation cities) or when no
+     * boundary relation can be found.
+     */
+    private function enrichCityBoundaryPolygon(array $data, string $countryCode, ?string $countyCode): array {
+        if (!$this->nominatimService->polygonIsPoint($data['polygon'] ?? null)) {
+            return $data;
+        }
+
+        $boundary = null;
+        if (!empty($data['wiki_data_id'])) {
+            $boundary = $this->nominatimService->overpassCityBoundaryByWikiDataId($data['wiki_data_id']);
+        }
+        if (!$boundary && !empty($data['name'])) {
+            $boundary = $this->nominatimService->overpassCityBoundaryByName(
+                $data['name'], $countryCode, $countyCode
+            );
+        }
+
+        if ($boundary) {
+            $data['polygon'] = json_encode($boundary);
+        }
+
+        return $data;
     }
 
     private function fetchNeighborhoodsFromNominatim(string $cityCode): void {
