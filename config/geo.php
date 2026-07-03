@@ -10,6 +10,7 @@ return [
         'email'         => env('GEO_NOMINATIM_EMAIL', ''),
         'rate_limit_ms' => env('GEO_NOMINATIM_RATE_LIMIT_MS', 1100),
         'timeout'       => env('GEO_NOMINATIM_TIMEOUT', 30),
+        'cache_ttl_days' => env('GEO_NOMINATIM_CACHE_TTL_DAYS', 30),
     ],
 
     'overpass' => [
