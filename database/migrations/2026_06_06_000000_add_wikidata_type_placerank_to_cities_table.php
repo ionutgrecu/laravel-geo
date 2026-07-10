@@ -20,12 +20,13 @@ class AddWikidataTypePlacerankToCitiesTable extends Migration {
                 $table->string('type', 32)->nullable()->after('wiki_data_id');
                 $table->unsignedInteger('place_rank')->nullable()->after('type');
                 $table->string('place_id', 32)->nullable()->after('place_rank');
+                $table->longText('polygon')->nullable()->after('place_id');
             });
     }
 
     public function down() {
         Schema::connection($this->connection)->table($this->table, function (Blueprint $table) {
-            $table->dropColumn(['wiki_data_id', 'type', 'place_rank', 'place_id']);
+            $table->dropColumn(['wiki_data_id', 'type', 'place_rank', 'place_id', 'polygon']);
         });
     }
 }

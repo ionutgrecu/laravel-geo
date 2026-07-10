@@ -17,7 +17,7 @@ use Ionutgrecu\LaravelGeo\Models\Region;
  */
 class GeoService {
     protected JsonLocationsService $jsonLocationsService;
-    protected NominatimService $nominatimService;
+    protected NominatimService     $nominatimService;
 
     public function __construct() {
         $this->jsonLocationsService = app(JsonLocationsService::class);
@@ -44,9 +44,9 @@ class GeoService {
                 'code' => $staticRegion['code'],
             ]);
             $region->fill([
-                'name'          => $staticRegion['name'],
-                'iso2'          => $staticRegion['iso2'],
-                'wiki_data_id'  => $staticRegion['wikiDataId'],
+                'name' => $staticRegion['name'],
+                'iso2' => $staticRegion['iso2'],
+                'wiki_data_id' => $staticRegion['wikiDataId'],
             ]);
             $region->save();
 
@@ -59,16 +59,16 @@ class GeoService {
             'code' => $country['code'],
         ]);
         $countryModel->fill([
-            'region_code'  => $country['regionCode'],
-            'name'         => $country['name'],
-            'name_int'     => $country['nameInt'],
-            'code'         => $country['code'],
-            'iso2'         => $country['iso2'],
-            'iso3'         => $country['iso3'],
-            'iso_numeric'  => $country['isoNumeric'],
-            'phone_code'   => $country['phoneCode'],
-            'currency'     => $country['currency'],
-            'languages'    => $country['languages'],
+            'region_code' => $country['regionCode'],
+            'name' => $country['name'],
+            'name_int' => $country['nameInt'],
+            'code' => $country['code'],
+            'iso2' => $country['iso2'],
+            'iso3' => $country['iso3'],
+            'iso_numeric' => $country['isoNumeric'],
+            'phone_code' => $country['phoneCode'],
+            'currency' => $country['currency'],
+            'languages' => $country['languages'],
             'wiki_data_id' => $country['wikiDataId'],
         ]);
         $countryModel->save();
@@ -82,8 +82,8 @@ class GeoService {
         ]);
         $countyModel->fill([
             'country_code' => $county['countryCode'],
-            'name'         => $county['name'],
-            'fips'         => $county['fips'],
+            'name' => $county['name'],
+            'fips' => $county['fips'],
             'wiki_data_id' => $county['wikiDataId'],
         ]);
         $countyModel->save();
@@ -96,15 +96,15 @@ class GeoService {
             'code' => $city['code'],
         ]);
         $cityModel->fill([
-            'county_code'  => $city['countyCode'],
-            'name'         => $city['name'],
-            'latitude'     => $city['latitude'],
-            'longitude'    => $city['longitude'],
+            'county_code' => $city['countyCode'],
+            'name' => $city['name'],
+            'latitude' => $city['latitude'],
+            'longitude' => $city['longitude'],
             'wiki_data_id' => $city['wikiDataId'] ?? null,
-            'type'         => $city['type'] ?? null,
-            'place_rank'   => $city['placeRank'] ?? null,
-            'place_id'     => $city['placeId'] ?? null,
-            'polygon'      => $city['polygon'] ?? null,
+            'type' => $city['type'] ?? null,
+            'place_rank' => $city['placeRank'] ?? null,
+            'place_id' => $city['placeId'] ?? null,
+            'polygon' => $city['polygon'] ?? null,
         ]);
         $cityModel->save();
 
@@ -202,12 +202,37 @@ class GeoService {
         return $results;
     }
 
-    function getNeighborhoods(string $cityCode, bool $online = true): Collection {
+    function getNeighborhoods(string $cityCode, bool $online = true): ?Collection {
         $results = Neighborhood::query()->where('city_code', $cityCode)->orderBy('name', 'ASC')->get();
 
+        // A sentinel row with a null name marks "we already checked, this city has no neighborhoods".
+        if ($results->contains(fn($n) => $n->name === null))
+            return null;
+
         if ($results->isEmpty() && $online) {
-            $this->fetchNeighborhoodsFromNominatim($cityCode);
+            $dataList = $this->fetchNeighborhoodsFromNominatim($cityCode);
+
+            if (empty($dataList)) {
+                // Persist the null sentinel so we don't hit Nominatim again for this city.
+                Neighborhood::create([
+                    'city_code' => $cityCode,
+                    'code'      => null,
+                    'name'      => null,
+                ]);
+            } else {
+                foreach ($dataList as $data) {
+                    if (empty($data['code']) || empty($data['name']))
+                        continue;
+
+                    $neighborhood = Neighborhood::firstOrNew(['code' => $data['code']]);
+                    $neighborhood->fill($data)->save();
+                }
+            }
+
             $results = Neighborhood::query()->where('city_code', $cityCode)->orderBy('name', 'ASC')->get();
+
+            if ($results->contains(fn($n) => $n->name === null))
+                return null;
         }
 
         return $results;
@@ -223,7 +248,8 @@ class GeoService {
 
             foreach ($results as $result) {
                 $data = $this->nominatimService->parseCountryResult($result);
-                if (empty($data['code'])) continue;
+                if (empty($data['code']))
+                    continue;
 
                 $country = Country::firstOrNew(['code' => $data['code']]);
                 $country->fill($data)->save();
@@ -239,7 +265,8 @@ class GeoService {
 
             foreach ($results as $result) {
                 $data = $this->nominatimService->parseCountyResult($result, $countryCode);
-                if (empty($data['code']) || empty($data['name'])) continue;
+                if (empty($data['code']) || empty($data['name']))
+                    continue;
 
                 $county = County::firstOrNew(['code' => $data['code']]);
                 $county->fill($data)->save();
@@ -250,7 +277,8 @@ class GeoService {
     }
 
     private function fetchCitiesFromNominatim(?string $countyCode, ?string $countryCode): void {
-        if (!$countryCode && !$countyCode) return;
+        if (!$countryCode && !$countyCode)
+            return;
 
         $resolvedCountryCode = $countryCode;
         $countyName          = null;
@@ -259,7 +287,7 @@ class GeoService {
             $county = County::query()->where('code', $countyCode)->first();
             if ($county) {
                 $resolvedCountryCode = $county->country_code;
-                $countyName           = $county->name;
+                $countyName          = $county->name;
             }
         } elseif ($countyCode) {
             $county = County::query()->where('code', $countyCode)->first();
@@ -268,7 +296,8 @@ class GeoService {
             }
         }
 
-        if (!$resolvedCountryCode) return;
+        if (!$resolvedCountryCode)
+            return;
 
         try {
             // Use Overpass API for full enumeration when we have a county ISO code
@@ -276,7 +305,10 @@ class GeoService {
                 $elements = $this->nominatimService->overpassCities($resolvedCountryCode, $countyCode);
                 foreach ($elements as $element) {
                     $data = $this->nominatimService->parseOverpassCityElement($element, $countyCode);
-                    if (empty($data['name']) || empty($data['code'])) continue;
+                    if (empty($data['name']) || empty($data['code']))
+                        continue;
+
+                    $data = $this->enrichCityBoundaryPolygon($data, $resolvedCountryCode, $countyCode);
 
                     $city = City::firstOrNew(['code' => $data['code']]);
                     $city->fill($data)->save();
@@ -294,10 +326,14 @@ class GeoService {
 
             foreach ($results as $result) {
                 $data = $this->nominatimService->parseCityResult($result, $countyCode);
-                if (empty($data['name'])) continue;
+                if (empty($data['name']))
+                    continue;
 
                 $code = $data['code'] ?? null;
-                if (!$code) continue;
+                if (!$code)
+                    continue;
+
+                $data = $this->enrichCityBoundaryPolygon($data, $resolvedCountryCode, $countyCode);
 
                 $city = City::firstOrNew(['code' => $code]);
                 $city->fill($data)->save();
@@ -307,48 +343,72 @@ class GeoService {
         }
     }
 
-    private function fetchNeighborhoodsFromNominatim(string $cityCode): void {
+    /**
+     * When a city was parsed as a Point (or with no geometry), attempt to fetch
+     * its real administrative boundary polygon via Overpass — first by wikidata
+     * ID, then by name within the county/country area. Leaves the polygon as-is
+     * when a real polygon was already parsed (way/relation cities) or when no
+     * boundary relation can be found.
+     */
+    private function enrichCityBoundaryPolygon(array $data, string $countryCode, ?string $countyCode): array {
+        if (!$this->nominatimService->polygonIsPoint($data['polygon'] ?? null)) {
+            return $data;
+        }
+
+        $boundary = null;
+        if (!empty($data['wiki_data_id'])) {
+            $boundary = $this->nominatimService->overpassCityBoundaryByWikiDataId($data['wiki_data_id']);
+        }
+        if (!$boundary && !empty($data['name'])) {
+            $boundary = $this->nominatimService->overpassCityBoundaryByName(
+                $data['name'], $countryCode, $countyCode
+            );
+        }
+
+        if ($boundary) {
+            $data['polygon'] = json_encode($boundary);
+        }
+
+        return $data;
+    }
+
+    private function fetchNeighborhoodsFromNominatim(string $cityCode): array {
+        /** @var City $city */
         $city = City::where('code', $cityCode)->first();
-        if (!$city) return;
+        if (!$city)
+            return [];
+
+        $dataList = [];
 
         try {
-            $elements = [];
-
             // Prefer Overpass area query by wikidata ID (most precise)
             if ($city->wiki_data_id) {
                 $elements = $this->nominatimService->overpassNeighborhoodsByWikiDataId($city->wiki_data_id);
+                foreach ($elements as $element) {
+                    $data = $this->nominatimService->parseOverpassNeighborhoodElement($element, $cityCode);
+                    if (empty($data['name']) || empty($data['code']))
+                        continue;
+
+                    $dataList[] = $data;
+                }
+                return $dataList;
             }
 
             // Fallback to Nominatim details by place_id
-            if (empty($elements) && $city->place_id) {
+            if ($city->place_id) {
                 $results = $this->nominatimService->nominatimDetailsByPlaceId($city->place_id);
                 foreach ($results as $result) {
                     $data = $this->nominatimService->parseNeighborhoodResult($result, $cityCode);
-                    if (empty($data['name']) || empty($data['code'])) continue;
+                    if (empty($data['name']) || empty($data['code']))
+                        continue;
 
-                    $neighborhood = Neighborhood::firstOrNew(['code' => $data['code']]);
-                    $neighborhood->fill($data)->save();
+                    $dataList[] = $data;
                 }
-                return;
-            }
-
-            // Fallback to bounding box Overpass query using lat/lng
-            if (empty($elements) && $city->latitude && $city->longitude) {
-                $elements = $this->nominatimService->overpassNeighborhoods(
-                    (float) $city->latitude,
-                    (float) $city->longitude
-                );
-            }
-dd($elements);
-            foreach ($elements as $element) {
-                $data = $this->nominatimService->parseOverpassNeighborhoodElement($element, $cityCode);
-                if (empty($data['name']) || empty($data['code'])) continue;
-
-                $neighborhood = Neighborhood::firstOrNew(['code' => $data['code']]);
-                $neighborhood->fill($data)->save();
             }
         } catch (\Throwable $e) {
             Log::warning("Nominatim fetch failed for neighborhoods in city {$cityCode}: " . $e->getMessage());
         }
+
+        return $dataList;
     }
 }

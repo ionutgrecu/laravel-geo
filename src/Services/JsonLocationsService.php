@@ -29,6 +29,24 @@ class JsonLocationsService {
         });
     }
 
+    function getCities(?string $countryCode = null): array {
+        if ($countryCode) {
+            $countryCode = strtoupper($countryCode);
+
+            if (is_file(__DIR__ . '/../../data/cities/' . $countryCode . '.json'))
+                return json_decode(file_get_contents(__DIR__ . '/../../data/cities/' . $countryCode . '.json'), true);
+            else
+                return [];
+        }
+
+        $cities = [];
+        foreach (glob(__DIR__ . '/../../data/cities/*.json') as $filename) {
+            $cities = array_merge($cities, json_decode(file_get_contents($filename), true));
+        }
+
+        return $cities;
+    }
+
     function getCounties(?string $countryCode = null): array {
         if ($countryCode) {
             $countryCode = strtoupper($countryCode);
