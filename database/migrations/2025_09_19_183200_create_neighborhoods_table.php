@@ -19,8 +19,8 @@ class CreateNeighborhoodsTable extends Migration {
             Schema::connection($this->connection)->create($this->table, function (Blueprint $table) {
                 $table->bigIncrements('id')->unsigned();
                 $table->string('city_code', 10);
-                $table->string('code', 16)->unique();
-                $table->string('name', 64)->index();
+                $table->string('code', 16)->nullable()->unique();
+                $table->string('name', 64)->nullable()->index();
                 $table->string('wiki_data_id', 16)->nullable();
                 $table->string('latitude', 32)->nullable();
                 $table->string('longitude', 32)->nullable();

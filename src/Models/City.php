@@ -13,6 +13,7 @@ use Ionutgrecu\LaravelGeo\Builders\CityQueryBuilder;
  * @package Ionutgrecu\LaravelGeo\Models
  * @property int id
  * @property string county_code
+ * @property string code
  * @property string name
  * @property string latitude
  * @property string longitude

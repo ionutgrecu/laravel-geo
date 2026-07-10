@@ -10,8 +10,8 @@ use function config;
  * @package Ionutgrecu\LaravelGeo\Models
  * @property int id
  * @property string city_code
- * @property string code
- * @property string name
+ * @property string|null code
+ * @property string|null name
  * @property string wiki_data_id
  * @property string latitude
  * @property string longitude
