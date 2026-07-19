@@ -3,10 +3,14 @@
 namespace Ionutgrecu\LaravelGeo\Services;
 
 use GuzzleHttp\Client;
+use GuzzleHttp\Exception\BadResponseException;
 use GuzzleHttp\Exception\GuzzleException;
+use Illuminate\Contracts\Cache\LockTimeoutException;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use function dd;
+use function usleep;
 
 class NominatimService {
     protected string $baseUrl;
@@ -15,8 +19,6 @@ class NominatimService {
     protected int    $rateLimitMs;
     protected int    $timeout;
     protected Client $client;
-
-    protected static ?float $lastRequestTime = null;
 
     public function __construct() {
         $this->baseUrl     = rtrim(config('geo.nominatim.base_url', 'https://nominatim.openstreetmap.org'), '/');
@@ -35,12 +37,58 @@ class NominatimService {
         ]);
     }
 
-    protected function throttle(): void {
-        if (self::$lastRequestTime !== null) {
-            $elapsed = (microtime(true) - self::$lastRequestTime) * 1000;
-            $sleep   = $this->rateLimitMs - $elapsed;
-            if ($sleep > 0) {
-                usleep((int)($sleep * 1000));
+    /**
+     * Block until it is safe to call the Nominatim API again, using the
+     * Laravel cache to coordinate rate limiting across separate web requests
+     * (a static in-process timestamp does not survive between requests).
+     */
+    protected function throttleNominatim(): void {
+        $this->acquireRateLimitLock(
+            'laravel-geo:nominatim:throttle',
+            (int) config('geo.nominatim.rate_limit_ms', 1100),
+            60,
+        );
+    }
+
+    /**
+     * Block until it is safe to call the Overpass API again, using the
+     * Laravel cache to coordinate across separate web requests.
+     */
+    protected function throttleOverpass(): void {
+        $this->acquireRateLimitLock(
+            'laravel-geo:overpass:throttle',
+            (int) config('geo.overpass.rate_limit_ms', 1500)
+        );
+    }
+
+    protected function acquireRateLimitLock(string $key, int $rateLimitMs, ?int $blockSecondsOverride = null): void {
+        if ($rateLimitMs <= 0) {
+            return;
+        }
+
+        // Lock auto-expires after the rate-limit window, so once we make a
+        // request the next caller (this process or any other) is forced to
+        // wait until the window elapses. We never release it manually.
+        $ttlSeconds    = max(1, (int) ceil($rateLimitMs / 1000));
+        $blockSeconds  = $blockSecondsOverride
+            ?? max($ttlSeconds, (int) ceil($rateLimitMs * 3 / 1000));
+        $retryDelayMs  = max(1, (int) ceil($rateLimitMs / 2));
+
+        // Retry indefinitely on timeout. The caller prefers honoring the
+        // Nominatim/Overpass rate-limit policy over returning fast, so we keep
+        // waiting until the lock is acquired rather than firing the API call
+        // without the gap. NOTE: under sustained contention this can block a
+        // web request for a long time — long-running contexts (import
+        // commands) are fine; web controllers may need a shorter
+        // rate_limit_ms or a queue if they time out.
+        while (true) {
+            try {
+                Cache::lock($key, $ttlSeconds)->block($blockSeconds);
+                usleep($retryDelayMs * 1000);
+                return;
+            } catch (LockTimeoutException $e) {
+                Log::debug('laravel-geo: throttle lock timeout for ' . $key . ', retrying');
+                usleep($retryDelayMs * 1000);
             }
         }
     }
@@ -59,15 +107,13 @@ class NominatimService {
 
         $params = array_merge($defaults, $params);
 
-        $this->throttle();
+        $this->throttleNominatim();
 
         try {
-            $response              = $this->client->get($endpoint, ['query' => $params]);
-            self::$lastRequestTime = microtime(true);
+            $response = $this->client->get($endpoint, ['query' => $params]);
             return json_decode($response->getBody()->getContents(), true) ?: [];
         } catch (GuzzleException $e) {
             Log::warning('Nominatim API request failed: ' . $e->getMessage());
-            self::$lastRequestTime = microtime(true);
             return [];
         }
     }
@@ -160,20 +206,18 @@ class NominatimService {
     }
 
     public function overpassCityBoundaryByWikiDataId(string $wikiDataId): ?array {
-        $overpassUrl     = config('geo.overpass.base_url', 'https://overpass-api.de/api/interpreter');
-        $overpassTimeout = config('geo.overpass.timeout', 60);
+        $overpassTimeout = (int) config('geo.overpass.timeout', 180);
 
         $query = '[out:json][timeout:' . $overpassTimeout . '];'
             . 'relation["wikidata"="' . $wikiDataId . '"]["boundary"="administrative"];'
             . 'out geom;';
 
-        $element = $this->overpassFirstElement($overpassUrl, $overpassTimeout, $query, 'city boundary by wikidata');
+        $element = $this->overpassFirstElement($query, 'city boundary by wikidata');
         return $element ? $this->convertOverpassGeometryToGeoJSON($element) : null;
     }
 
     public function overpassCityBoundaryByName(string $name, string $countryCode, ?string $countyIsoCode = null): ?array {
-        $overpassUrl     = config('geo.overpass.base_url', 'https://overpass-api.de/api/interpreter');
-        $overpassTimeout = config('geo.overpass.timeout', 60);
+        $overpassTimeout = (int) config('geo.overpass.timeout', 180);
 
         if ($countyIsoCode) {
             $areaFilter = 'area["ISO3166-2"="' . $countyIsoCode . '"]["boundary"="administrative"]->.searchArea;';
@@ -186,7 +230,7 @@ class NominatimService {
             . 'relation["boundary"="administrative"]["name"="' . $this->escapeOverpassString($name) . '"](area.searchArea);'
             . 'out geom;';
 
-        $element = $this->overpassFirstElement($overpassUrl, $overpassTimeout, $query, 'city boundary by name');
+        $element = $this->overpassFirstElement($query, 'city boundary by name');
         return $element ? $this->convertOverpassGeometryToGeoJSON($element) : null;
     }
 
@@ -197,24 +241,65 @@ class NominatimService {
         return !is_array($decoded) || ($decoded['type'] ?? '') === 'Point';
     }
 
-    protected function overpassFirstElement(string $overpassUrl, int $overpassTimeout, string $query, string $context): ?array {
-        try {
-            $this->throttle();
-            $response = (new Client())->post($overpassUrl, [
-                'form_params' => ['data' => $query],
-                'timeout' => $overpassTimeout,
-                'headers' => ['User-Agent' => $this->userAgent],
-            ]);
+    protected function overpassFirstElement(string $query, string $context): ?array {
+        $data     = $this->overpassRequest($query, $context);
+        $elements = $data['elements'] ?? [];
+        return $elements[0] ?? null;
+    }
 
-            self::$lastRequestTime = microtime(true);
-            $data                  = json_decode($response->getBody()->getContents(), true);
-            $elements              = $data['elements'] ?? [];
-            return $elements[0] ?? null;
-        } catch (GuzzleException $e) {
-            Log::warning('Overpass API request failed for ' . $context . ': ' . $e->getMessage());
-            self::$lastRequestTime = microtime(true);
-            return null;
+    /**
+     * POST an Overpass QL query and return the decoded JSON envelope, with
+     * retry on transient HTTP 429 / 503 / 504. Up to 5 attempts total with
+     * exponential backoff (1.5s, 3s, 6s, 12s, 24s) plus ±25% jitter. Each
+     * attempt re-acquires the cross-request Overpass throttle lock so the
+     * rate-limit gap is honored even across retries. Returns null when the
+     * final attempt fails or a non-retryable error is hit; callers surface
+     * that as null/empty exactly as before.
+     */
+    protected function overpassRequest(string $query, string $context): ?array {
+        $overpassUrl     = (string) config('geo.overpass.base_url', 'https://overpass-api.de/api/interpreter');
+        $overpassTimeout = (int) config('geo.overpass.timeout', 180);
+
+        $retryable    = [429, 503, 504];
+        $maxAttempts  = 5;
+        $baseDelayMs  = 1500;
+
+        for ($attempt = 1; $attempt <= $maxAttempts; $attempt++) {
+            $this->throttleOverpass();
+
+            try {
+                $response = (new Client())->post($overpassUrl, [
+                    'form_params' => ['data' => $query],
+                    'timeout' => $overpassTimeout,
+                    'headers' => ['User-Agent' => $this->userAgent],
+                ]);
+
+                $body = $response->getBody()->getContents();
+                return json_decode($body, true) ?: [];
+            } catch (GuzzleException $e) {
+                $status = ($e instanceof BadResponseException && $e->hasResponse())
+                    ? $e->getResponse()->getStatusCode()
+                    : null;
+
+                if (!in_array($status, $retryable, true) || $attempt === $maxAttempts) {
+                    Log::warning('Overpass API request failed for ' . $context . ': ' . $e->getMessage());
+                    return null;
+                }
+
+                // Exponential backoff with ±25% jitter.
+                $delayMs = (int) ceil($baseDelayMs * (2 ** ($attempt - 1)));
+                $jitter  = random_int((int) (-$delayMs * 0.25), (int) ($delayMs * 0.25));
+                $sleepMs = max(0, $delayMs + $jitter);
+                usleep($sleepMs * 1000);
+
+                Log::debug(sprintf(
+                    'laravel-geo: overpass %d for %s, retrying (attempt %d/%d after %dms)',
+                    $status, $context, $attempt + 1, $maxAttempts, $sleepMs,
+                ));
+            }
         }
+
+        return null;
     }
 
     protected function escapeOverpassString(string $value): string {
@@ -222,9 +307,6 @@ class NominatimService {
     }
 
     public function overpassNeighborhoodsByWikiDataId(string $wikiDataId): array {
-        $overpassUrl     = config('geo.overpass.base_url', 'https://overpass-api.de/api/interpreter');
-        $overpassTimeout = config('geo.overpass.timeout', 60);
-
         $query = '[out:json][timeout:180];
 
                    area["wikidata"="' . $wikiDataId . '"]["boundary"="administrative"]->.city;
@@ -235,23 +317,9 @@ class NominatimService {
 
                    out center tags;';
 
-        try {
-            $this->throttle();
-            $response = (new Client())->post($overpassUrl, [
-                'form_params' => ['data' => $query],
-                'timeout' => $overpassTimeout,
-                'headers' => ['User-Agent' => $this->userAgent],
-            ]);
+        $data = $this->overpassRequest($query, 'neighborhoods by wikidata');
 
-            self::$lastRequestTime = microtime(true);
-            $data                  = json_decode($response->getBody()->getContents(), true);
-
-            return $data['elements'] ?? [];
-        } catch (GuzzleException $e) {
-            Log::warning('Overpass API request failed for neighborhoods by wikidata: ' . $e->getMessage());
-            self::$lastRequestTime = microtime(true);
-            return [];
-        }
+        return $data['elements'] ?? [];
     }
 
     public function nominatimDetailsByPlaceId(string $placeId): array {
@@ -301,8 +369,7 @@ class NominatimService {
     // --- Overpass API methods for enumeration ---
 
     public function overpassCities(string $countryCode, ?string $countyIsoCode = null): array {
-        $overpassUrl     = config('geo.overpass.base_url', 'https://overpass-api.de/api/interpreter');
-        $overpassTimeout = config('geo.overpass.timeout', 60);
+        $overpassTimeout = (int) config('geo.overpass.timeout', 180);
 
         if ($countyIsoCode) {
             $areaFilter = 'area["ISO3166-2"="' . $countyIsoCode . '"]["boundary"="administrative"]->.searchArea;';
@@ -319,27 +386,13 @@ class NominatimService {
             . ');'
             . 'out geom center tags;';
 
-        try {
-            $this->throttle();
-            $response = (new Client())->post($overpassUrl, [
-                'form_params' => ['data' => $query],
-                'timeout' => $overpassTimeout,
-                'headers' => ['User-Agent' => $this->userAgent],
-            ]);
+        $data = $this->overpassRequest($query, 'cities');
 
-            self::$lastRequestTime = microtime(true);
-            $data                  = json_decode($response->getBody()->getContents(), true);
-            return $data['elements'] ?? [];
-        } catch (GuzzleException $e) {
-            Log::warning('Overpass API request failed for cities: ' . $e->getMessage());
-            self::$lastRequestTime = microtime(true);
-            return [];
-        }
+        return $data['elements'] ?? [];
     }
 
     public function overpassNeighborhoods(float $lat, float $lon, float $radiusKm = 10): array {
-        $overpassUrl     = config('geo.overpass.base_url', 'https://overpass-api.de/api/interpreter');
-        $overpassTimeout = config('geo.overpass.timeout', 60);
+        $overpassTimeout = (int) config('geo.overpass.timeout', 180);
 
         $delta = $radiusKm * 0.009;
         $bbox  = ($lat - $delta) . ',' . ($lon - $delta) . ',' . ($lat + $delta) . ',' . ($lon + $delta);
@@ -352,22 +405,9 @@ class NominatimService {
             . ');'
             . 'out geom center;';
 
-        try {
-            $this->throttle();
-            $response = (new Client())->post($overpassUrl, [
-                'form_params' => ['data' => $query],
-                'timeout' => $overpassTimeout,
-                'headers' => ['User-Agent' => $this->userAgent],
-            ]);
+        $data = $this->overpassRequest($query, 'neighborhoods');
 
-            self::$lastRequestTime = microtime(true);
-            $data                  = json_decode($response->getBody()->getContents(), true);
-            return $data['elements'] ?? [];
-        } catch (GuzzleException $e) {
-            Log::warning('Overpass API request failed for neighborhoods: ' . $e->getMessage());
-            self::$lastRequestTime = microtime(true);
-            return [];
-        }
+        return $data['elements'] ?? [];
     }
 
     // --- Parse methods ---

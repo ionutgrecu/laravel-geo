@@ -2,8 +2,10 @@
 
 namespace Ionutgrecu\LaravelGeo\Services;
 
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\Facades\Log;
+use Ionutgrecu\LaravelGeo\Jobs\EnrichCityBoundaryJob;
 use Ionutgrecu\LaravelGeo\Models\City;
 use Ionutgrecu\LaravelGeo\Models\Country;
 use Ionutgrecu\LaravelGeo\Models\County;
@@ -186,16 +188,6 @@ class GeoService {
 
         if ($results->isEmpty() && $online) {
             $this->fetchCitiesFromNominatim($countyCode, $countryCode);
-
-            $query = City::query()->orderBy('name', 'ASC');
-            if ($countyCode) {
-                $query->where('county_code', $countyCode);
-            }
-            if ($countryCode) {
-                $query->whereHas('county', function ($q) use ($countryCode) {
-                    $q->where('country_code', $countryCode);
-                });
-            }
             $results = $query->get();
         }
 
@@ -216,8 +208,8 @@ class GeoService {
                 // Persist the null sentinel so we don't hit Nominatim again for this city.
                 Neighborhood::create([
                     'city_code' => $cityCode,
-                    'code'      => null,
-                    'name'      => null,
+                    'code' => null,
+                    'name' => null,
                 ]);
             } else {
                 foreach ($dataList as $data) {
@@ -303,15 +295,90 @@ class GeoService {
             // Use Overpass API for full enumeration when we have a county ISO code
             if ($countyCode) {
                 $elements = $this->nominatimService->overpassCities($resolvedCountryCode, $countyCode);
+                $elements = $this->dedupOverpassCityElements($elements);
+
                 foreach ($elements as $element) {
                     $data = $this->nominatimService->parseOverpassCityElement($element, $countyCode);
                     if (empty($data['name']) || empty($data['code']))
                         continue;
 
-                    $data = $this->enrichCityBoundaryPolygon($data, $resolvedCountryCode, $countyCode);
+                    // Skip if a more prominent representation of the same city
+                    // already exists (lower place_rank = more prominent). Keeps
+                    // the existing row and avoids demoting it / re-keying its
+                    // code via the OR-match below.
+                    if (!empty($data['wiki_data_id']) && $data['place_rank'] !== null) {
+                        if (City::where('wiki_data_id', $data['wiki_data_id'])
+                            ->whereNotNull('place_rank')
+                            ->where('place_rank', '<', $data['place_rank'])
+                            ->exists()
+                        ) {
+                            continue;
+                        }
+                    }
 
-                    $city = City::firstOrNew(['code' => $data['code']]);
-                    $city->fill($data)->save();
+                    // Look up an existing row by the most specific key available for
+                    // this call. When a county is in scope, also match by (name,
+                    // county_code) so a city re-arriving with a different OSM
+                    // code (e.g. node -> relation) still hits its stored row.
+                    // Join on wiki_data_id only when BOTH the incoming $data
+                    // and the stored row actually carry one — the whereNotNull
+                    // guards the OR clause from matching NULL-keyed rows.
+                    $query = City::query();
+
+                    if ($countyCode) {
+                        $query->where(function ($q) use ($data, $countyCode) {
+                            $q->where('name', $data['name'])
+                              ->where('county_code', $countyCode);
+                        })->orWhere('code', $data['code']);
+
+                        if (!empty($data['wiki_data_id'])) {
+                            $query->orWhere(function ($q) use ($data) {
+                                $q->whereNotNull('wiki_data_id')
+                                  ->where('wiki_data_id', $data['wiki_data_id']);
+                            });
+                        }
+                    } else {
+                        $query->where('code', $data['code']);
+
+                        if (!empty($data['wiki_data_id'])) {
+                            $query->orWhere(function ($q) use ($data) {
+                                $q->whereNotNull('wiki_data_id')
+                                  ->where('wiki_data_id', $data['wiki_data_id']);
+                            });
+                        }
+                    }
+
+                    $city = $query->first();
+                    if (!$city)
+                        $city = new City();
+
+                    // Fill only empty properties of the existing row from
+                    // $data. Never overwrite a previously stored value (e.g.
+                    // a real Polygon must not be clobbered by a new Point).
+                    // The `code` attribute is resolved separately by OSM-type
+                    // priority (N > R > W).
+                    foreach ($data as $key => $value) {
+                        if ($key === 'code')
+                            continue;
+
+                        if ($value === null || $value === '')
+                            continue;
+
+                        $current = $city->getAttribute($key);
+                        if ($current === null || $current === '') {
+                            $city->setAttribute($key, $value);
+                        }
+                    }
+
+                    $city->code = $this->pickCityCodeByPriority($city->code ?? null, $data['code'] ?? null);
+                    $city->save();
+
+                    // Dispatch a per-city async enrichment job for every
+                    // stored city. The job self-decides whether to fetch a
+                    // boundary: if the stored polygon is already a real
+                    // Polygon/MultiPolygon (way/relation cities) it exits
+                    // successfully without an Overpass call.
+                    EnrichCityBoundaryJob::dispatch($city->code, $resolvedCountryCode, $countyCode);
                 }
                 return;
             }
@@ -339,7 +406,7 @@ class GeoService {
                 $city->fill($data)->save();
             }
         } catch (\Throwable $e) {
-            Log::warning("Nominatim fetch failed for cities: " . $e->getMessage());
+            Log::warning("Nominatim fetch failed for cities: " . $e->getMessage(),['trace'=>$e->getTraceAsString()]);
         }
     }
 
@@ -370,6 +437,62 @@ class GeoService {
         }
 
         return $data;
+    }
+
+    /**
+     * Pick the city `code` by OSM-type priority: N (node) > R (relation)
+     * > W (way) > anything else. Used during upsert so a stored code is
+     * only replaced when the incoming code is of a higher-priority type.
+     * When the two codes share the same priority prefix, keep the
+     * existing code to avoid churn.
+     */
+    private function pickCityCodeByPriority(?string $existing, ?string $incoming): ?string {
+        $candidates = array_filter([$existing, $incoming], fn($c) => $c !== null && $c !== '');
+        if (empty($candidates))
+            return null;
+        if (count($candidates) === 1)
+            return reset($candidates);
+
+        $rank = ['N' => 0, 'R' => 1, 'W' => 2];
+        $rankExisting = $rank[strtoupper(substr((string)$existing, 0, 1))] ?? 3;
+        $rankIncoming = $rank[strtoupper(substr((string)$incoming, 0, 1))] ?? 3;
+
+        // Higher-priority (lower rank number) wins. Tie -> keep existing.
+        return $rankIncoming < $rankExisting ? $incoming : $existing;
+    }
+
+    /**
+     * Collapse the Overpass response to one element per city. Overpass returns
+     * node + way + relation elements for the same city, all sharing the same
+     * wikidata tag but with different OSM ids (hence different city `code`s).
+     * Inserting all of them would create multiple rows per city and trip the
+     * unique `code` index on re-runs.
+     *
+     * Preference order: relation (administrative boundary polygon) > way >
+     * node (point) > other. Elements without a wikidata tag pass through
+     * untouched (we can't group them by city identity).
+     */
+    private function dedupOverpassCityElements(array $elements): array {
+        $rank = ['relation' => 0, 'way' => 1, 'node' => 2];
+        $byWiki  = []; // lowercased wikidata => [element, rank]
+        $without = [];
+
+        foreach ($elements as $element) {
+            $wiki = strtolower(trim((string)($element['tags']['wikidata'] ?? '')));
+            $type = $element['type'] ?? '';
+            $r    = $rank[$type] ?? 3;
+
+            if ($wiki === '') {
+                $without[] = $element;
+                continue;
+            }
+
+            if (!isset($byWiki[$wiki]) || $r < $byWiki[$wiki][1]) {
+                $byWiki[$wiki] = [$element, $r];
+            }
+        }
+
+        return array_merge(array_column($byWiki, 0), $without);
     }
 
     private function fetchNeighborhoodsFromNominatim(string $cityCode): array {
