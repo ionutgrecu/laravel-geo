@@ -10,6 +10,7 @@ use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use function dd;
+use function strtoupper;
 use function usleep;
 
 class NominatimService {
@@ -275,6 +276,7 @@ class NominatimService {
                 ]);
 
                 $body = $response->getBody()->getContents();
+//dump($query,$body);
                 return json_decode($body, true) ?: [];
             } catch (GuzzleException $e) {
                 $status = ($e instanceof BadResponseException && $e->hasResponse())
@@ -391,6 +393,21 @@ class NominatimService {
         return $data['elements'] ?? [];
     }
 
+    public function overpassCounties(string $countryCode): array {
+        $overpassTimeout = (int) config('geo.overpass.timeout', 180);
+
+        $areaFilter = 'area["ISO3166-1"="' . strtoupper($countryCode) . '"]["boundary"="administrative"]->.searchArea;';
+
+        $query = '[out:json][timeout:' . $overpassTimeout . '];'
+            . $areaFilter
+            . 'relation["boundary"="administrative"]["admin_level"~"^[4-6]$"]["ISO3166-2"~"^'.strtoupper($countryCode).'-"](area.searchArea);'
+            . 'out center tags;';
+
+        $data = $this->overpassRequest($query, 'counties');
+
+        return $data['elements'] ?? [];
+    }
+
     public function overpassNeighborhoods(float $lat, float $lon, float $radiusKm = 10): array {
         $overpassTimeout = (int) config('geo.overpass.timeout', 180);
 
@@ -448,6 +465,29 @@ class NominatimService {
             'country_code' => strtoupper($countryCode),
             'name' => $name,
             'wiki_data_id' => $extratags['wikidata'] ?? null,
+        ], fn($value) => $value !== null && $value !== '');
+    }
+
+    public function parseOverpassCountyElement(array $element, string $countryCode): array {
+        $tags = $element['tags'] ?? [];
+        $name = $tags['name'] ?? null;
+        if (!$name) {
+            return [];
+        }
+
+        $isoCode = $tags['ISO3166-2'] ?? null;
+        if ($isoCode) {
+            $code = strtoupper($isoCode);
+        } else {
+            $code = strtoupper($countryCode) . '-' . strtoupper(Str::slug($name, ''));
+        }
+
+        return array_filter([
+            'code' => $code,
+            'country_code' => strtoupper($countryCode),
+            'name' => $name,
+            'fips' => $tags['fips_code'] ?? $tags['fips'] ?? null,
+            'wiki_data_id' => $tags['wikidata'] ?? null,
         ], fn($value) => $value !== null && $value !== '');
     }
 

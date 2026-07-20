@@ -253,10 +253,10 @@ class GeoService {
 
     private function fetchCountiesFromNominatim(string $countryCode): void {
         try {
-            $results = $this->nominatimService->searchCounties($countryCode);
+            $elements = $this->nominatimService->overpassCounties($countryCode);
 
-            foreach ($results as $result) {
-                $data = $this->nominatimService->parseCountyResult($result, $countryCode);
+            foreach ($elements as $element) {
+                $data = $this->nominatimService->parseOverpassCountyElement($element, $countryCode);
                 if (empty($data['code']) || empty($data['name']))
                     continue;
 
