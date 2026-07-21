@@ -6,6 +6,7 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\Facades\Log;
 use Ionutgrecu\LaravelGeo\Jobs\EnrichCityBoundaryJob;
+use Ionutgrecu\LaravelGeo\Jobs\EnrichCountyBoundaryJob;
 use Ionutgrecu\LaravelGeo\Models\City;
 use Ionutgrecu\LaravelGeo\Models\Country;
 use Ionutgrecu\LaravelGeo\Models\County;
@@ -281,6 +282,15 @@ class GeoService {
 
                 $county = County::firstOrNew(['code' => $data['code']]);
                 $county->fill($data)->save();
+
+                // Dispatch a per-county async job to fetch the boundary
+                // polygon via Nominatim /lookup. The job self-skips when the
+                // row already carries a polygon.
+                $osmType = strtoupper(substr((string)($element['type'] ?? ''), 0, 1));
+                $osmId   = (string)($element['id'] ?? '');
+                if ($osmType && $osmId !== '') {
+                    EnrichCountyBoundaryJob::dispatch($county->code, $osmType . $osmId);
+                }
             }
         } catch (\Throwable $e) {
             Log::warning("Nominatim fetch failed for counties in {$countryCode}: " . $e->getMessage());

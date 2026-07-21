@@ -324,6 +324,30 @@ class NominatimService {
         return $data['elements'] ?? [];
     }
 
+    /**
+     * Look up a single OSM object (e.g. "R1466586") via Nominatim /lookup and
+     * return its full polygon geometry as a GeoJSON array, or null when the
+     * object has no boundary polygon or the request fails.
+     */
+    public function nominatimLookupPolygon(string $osmId): ?array {
+        $result = $this->request('/lookup', [
+            'osm_ids' => $osmId,
+            'format' => 'geojson',
+            'polygon_geojson' => 1,
+            'addressdetails' => 0,
+            'extratags' => 0,
+            'namedetails' => 0,
+        ]);
+
+        if (!is_array($result)) {
+            return null;
+        }
+
+        $features = $result['features'] ?? [];
+
+        return $features[0]['geometry'] ?? null;
+    }
+
     public function nominatimDetailsByPlaceId(string $placeId): array {
         $result = $this->request('/details', [
             'place_id' => $placeId,
@@ -401,7 +425,7 @@ class NominatimService {
         $query = '[out:json][timeout:' . $overpassTimeout . '];'
             . $areaFilter
             . 'relation["boundary"="administrative"]["admin_level"~"^[4-6]$"]["ISO3166-2"~"^'.strtoupper($countryCode).'-"](area.searchArea);'
-            . 'out geom tags;';
+            . 'out center tags;';
 
         $data = $this->overpassRequest($query, 'counties');
 
@@ -482,15 +506,12 @@ class NominatimService {
             $code = strtoupper($countryCode) . '-' . strtoupper(Str::slug($name, ''));
         }
 
-        $geojson = $this->convertOverpassGeometryToGeoJSON($element);
-
         return array_filter([
             'code' => $code,
             'country_code' => strtoupper($countryCode),
             'name' => $name,
             'fips' => $tags['fips_code'] ?? $tags['fips'] ?? null,
             'wiki_data_id' => $tags['wikidata'] ?? null,
-            'polygon' => $geojson ? json_encode($geojson) : null,
         ], fn($value) => $value !== null && $value !== '');
     }
 
