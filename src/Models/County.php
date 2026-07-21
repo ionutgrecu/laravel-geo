@@ -18,6 +18,7 @@ use function config;
  * @property string name
  * @property string fips
  * @property string wiki_data_id
+ * @property string polygon
  * @property string created_at
  * @property string updated_at
  */

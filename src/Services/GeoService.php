@@ -251,9 +251,28 @@ class GeoService {
         }
     }
 
-    private function fetchCountiesFromNominatim(string $countryCode): void {
+    private function fetchCountiesFromNominatim(string $countryCode): ?County {
         try {
             $elements = $this->nominatimService->overpassCounties($countryCode);
+
+            // No state/county subdivisions for this country — fall back to a
+            // single county row that mirrors the country itself, so downstream
+            // code (e.g. getCities) can still resolve a county_code for places
+            // located in countries without an admin_level 4–6 subdivision.
+            if (empty($elements)) {
+                $country = Country::query()->where('code', $countryCode)->first();
+                if (!$country)
+                    return null;
+
+                $county = County::firstOrNew(['code' => $countryCode]);
+                $county->fill([
+                    'country_code'  => $countryCode,
+                    'name'          => $country->name,
+                    'wiki_data_id'  => $country->wiki_data_id,
+                ])->save();
+
+                return $county;
+            }
 
             foreach ($elements as $element) {
                 $data = $this->nominatimService->parseOverpassCountyElement($element, $countryCode);
@@ -266,6 +285,8 @@ class GeoService {
         } catch (\Throwable $e) {
             Log::warning("Nominatim fetch failed for counties in {$countryCode}: " . $e->getMessage());
         }
+
+        return null;
     }
 
     private function fetchCitiesFromNominatim(?string $countyCode, ?string $countryCode): void {

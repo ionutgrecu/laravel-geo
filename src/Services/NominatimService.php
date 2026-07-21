@@ -401,7 +401,7 @@ class NominatimService {
         $query = '[out:json][timeout:' . $overpassTimeout . '];'
             . $areaFilter
             . 'relation["boundary"="administrative"]["admin_level"~"^[4-6]$"]["ISO3166-2"~"^'.strtoupper($countryCode).'-"](area.searchArea);'
-            . 'out center tags;';
+            . 'out geom tags;';
 
         $data = $this->overpassRequest($query, 'counties');
 
@@ -482,12 +482,15 @@ class NominatimService {
             $code = strtoupper($countryCode) . '-' . strtoupper(Str::slug($name, ''));
         }
 
+        $geojson = $this->convertOverpassGeometryToGeoJSON($element);
+
         return array_filter([
             'code' => $code,
             'country_code' => strtoupper($countryCode),
             'name' => $name,
             'fips' => $tags['fips_code'] ?? $tags['fips'] ?? null,
             'wiki_data_id' => $tags['wikidata'] ?? null,
+            'polygon' => $geojson ? json_encode($geojson) : null,
         ], fn($value) => $value !== null && $value !== '');
     }
 
