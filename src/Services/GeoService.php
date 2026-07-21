@@ -250,8 +250,12 @@ class GeoService {
         return $results;
     }
 
-    function getNeighborhoods(string $cityCode, bool $online = true): ?Collection {
-        $results = Neighborhood::query()->where('city_code', $cityCode)->orderBy('name', 'ASC')->get();
+    function getNeighborhoods(string $cityCode, bool $includePolygon = true, bool $online = true): ?Collection {
+        $results = Neighborhood::query()
+            ->when(!$includePolygon, fn($q) => $q->select($this->columnsExceptPolygon(new Neighborhood())))
+            ->where('city_code', $cityCode)
+            ->orderBy('name', 'ASC')
+            ->get();
 
         // A sentinel row with a null name marks "we already checked, this city has no neighborhoods".
         if ($results->contains(fn($n) => $n->name === null))
@@ -320,7 +324,11 @@ class GeoService {
                 }
             }
 
-            $results = Neighborhood::query()->where('city_code', $cityCode)->orderBy('name', 'ASC')->get();
+            $results = Neighborhood::query()
+                ->when(!$includePolygon, fn($q) => $q->select($this->columnsExceptPolygon(new Neighborhood())))
+                ->where('city_code', $cityCode)
+                ->orderBy('name', 'ASC')
+                ->get();
 
             if ($results->contains(fn($n) => $n->name === null))
                 return null;
