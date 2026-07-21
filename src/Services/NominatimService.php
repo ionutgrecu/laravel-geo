@@ -348,6 +348,32 @@ class NominatimService {
         return $features[0]['geometry'] ?? null;
     }
 
+    /**
+     * Resolve a country's OSM relation id via the Overpass API by its ISO2
+     * code, returning the id in the format Nominatim /lookup expects (e.g.
+     * "R1466586"), or null when the country relation cannot be found or the
+     * request fails. Countries are admin_level=2 relations tagged with
+     * ISO3166-1.
+     */
+    public function overpassCountryOsmId(string $countryCode): ?string {
+        $overpassTimeout = (int) config('geo.overpass.timeout', 180);
+
+        $query = '[out:json][timeout:' . $overpassTimeout . '];'
+            . 'relation["boundary"="administrative"]["admin_level"="2"]["ISO3166-1"="' . strtoupper($countryCode) . '"];'
+            . 'out tags;';
+
+        $data = $this->overpassRequest($query, 'country');
+
+        $elements = $data['elements'] ?? [];
+        if (empty($elements[0])) {
+            return null;
+        }
+
+        $id = $elements[0]['id'] ?? null;
+
+        return $id !== null ? 'R' . (string)$id : null;
+    }
+
     public function nominatimDetailsByPlaceId(string $placeId): array {
         $result = $this->request('/details', [
             'place_id' => $placeId,

@@ -15,12 +15,14 @@ use function config;
  * @property int id
  * @property string region_code
  * @property string code
+ * @property string|null osm_id
  * @property string name
  * @property string name_int
  * @property string iso2
  * @property string iso3
  * @property string iso_numeric
  * @property string wiki_data_id
+ * @property string|null polygon
  * @property string phone_code
  * @property string currency
  * @property string[] languages
