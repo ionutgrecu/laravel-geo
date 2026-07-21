@@ -272,8 +272,51 @@ class GeoService {
                     if (empty($data['code']) || empty($data['name']))
                         continue;
 
-                    $neighborhood = Neighborhood::firstOrNew(['code' => $data['code']]);
-                    $neighborhood->fill($data)->save();
+                    // Look up an existing row by (name, city_code) OR code OR
+                    // wiki_data_id, so a neighborhood re-arriving with a
+                    // different OSM code (e.g. node -> relation) still hits its
+                    // stored row. The outer query scopes by city_code; the
+                    // sentinel row (code=null, name=null) is never matched
+                    // because SQL `=` never equals NULL.
+                    $query = Neighborhood::query()->where('city_code', $cityCode);
+                    $query->where(function ($q) use ($data) {
+                        $q->where('name', $data['name']);
+                    })->orWhere('code', $data['code']);
+
+                    if (!empty($data['wiki_data_id'])) {
+                        $query->orWhere(function ($q) use ($data) {
+                            $q->whereNotNull('wiki_data_id')
+                              ->where('wiki_data_id', $data['wiki_data_id']);
+                        });
+                    }
+
+                    $neighborhood = $query->first();
+                    if (!$neighborhood)
+                        $neighborhood = new Neighborhood();
+
+                    // Fill only empty properties of the existing row from
+                    // $data. Never overwrite a previously stored value (e.g.
+                    // a real Polygon must not be clobbered by a new Point).
+                    // The `code` attribute is resolved separately by OSM-type
+                    // priority (R > W > N).
+                    foreach ($data as $key => $value) {
+                        if ($key === 'code')
+                            continue;
+
+                        if ($value === null || $value === '')
+                            continue;
+
+                        $current = $neighborhood->getAttribute($key);
+                        if ($current === null || $current === '') {
+                            $neighborhood->setAttribute($key, $value);
+                        }
+                    }
+
+                    $neighborhood->code = $this->pickNeighborhoodCodeByPriority(
+                        $neighborhood->code ?? null,
+                        $data['code'] ?? null,
+                    );
+                    $neighborhood->save();
                 }
             }
 
@@ -546,6 +589,28 @@ class GeoService {
     }
 
     /**
+     * Pick the neighborhood `code` by OSM-type priority: R (relation) > W
+     * (way) > N (node) > anything else. Used during upsert so a stored code
+     * is only replaced when the incoming code is of a higher-priority type.
+     * When the two codes share the same priority prefix, keep the existing
+     * code to avoid churn.
+     */
+    private function pickNeighborhoodCodeByPriority(?string $existing, ?string $incoming): ?string {
+        $candidates = array_filter([$existing, $incoming], fn($c) => $c !== null && $c !== '');
+        if (empty($candidates))
+            return null;
+        if (count($candidates) === 1)
+            return reset($candidates);
+
+        $rank = ['R' => 0, 'W' => 1, 'N' => 2];
+        $rankExisting = $rank[strtoupper(substr((string)$existing, 0, 1))] ?? 3;
+        $rankIncoming = $rank[strtoupper(substr((string)$incoming, 0, 1))] ?? 3;
+
+        // Higher-priority (lower rank number) wins. Tie -> keep existing.
+        return $rankIncoming < $rankExisting ? $incoming : $existing;
+    }
+
+    /**
      * Collapse the Overpass response to one element per city. Overpass returns
      * node + way + relation elements for the same city, all sharing the same
      * wikidata tag but with different OSM ids (hence different city `code`s).
@@ -557,6 +622,41 @@ class GeoService {
      * untouched (we can't group them by city identity).
      */
     private function dedupOverpassCityElements(array $elements): array {
+        $rank = ['relation' => 0, 'way' => 1, 'node' => 2];
+        $byWiki  = []; // lowercased wikidata => [element, rank]
+        $without = [];
+
+        foreach ($elements as $element) {
+            $wiki = strtolower(trim((string)($element['tags']['wikidata'] ?? '')));
+            $type = $element['type'] ?? '';
+            $r    = $rank[$type] ?? 3;
+
+            if ($wiki === '') {
+                $without[] = $element;
+                continue;
+            }
+
+            if (!isset($byWiki[$wiki]) || $r < $byWiki[$wiki][1]) {
+                $byWiki[$wiki] = [$element, $r];
+            }
+        }
+
+        return array_merge(array_column($byWiki, 0), $without);
+    }
+
+    /**
+     * Collapse the Overpass response to one element per neighborhood.
+     * Overpass returns node + way + relation elements for the same
+     * neighborhood, all sharing the same wikidata tag but with different
+     * OSM ids (hence different neighborhood `code`s). Inserting all of
+     * them would create multiple rows per neighborhood and trip the
+     * unique `code` index on re-runs.
+     *
+     * Preference order: relation (administrative boundary polygon) > way
+     * > node (point) > other. Elements without a wikidata tag pass through
+     * untouched (we can't group them by neighborhood identity).
+     */
+    private function dedupOverpassNeighborhoodElements(array $elements): array {
         $rank = ['relation' => 0, 'way' => 1, 'node' => 2];
         $byWiki  = []; // lowercased wikidata => [element, rank]
         $without = [];
@@ -591,6 +691,7 @@ class GeoService {
             // Prefer Overpass area query by wikidata ID (most precise)
             if ($city->wiki_data_id) {
                 $elements = $this->nominatimService->overpassNeighborhoodsByWikiDataId($city->wiki_data_id);
+                $elements = $this->dedupOverpassNeighborhoodElements($elements);
                 foreach ($elements as $element) {
                     $data = $this->nominatimService->parseOverpassNeighborhoodElement($element, $cityCode);
                     if (empty($data['name']) || empty($data['code']))
