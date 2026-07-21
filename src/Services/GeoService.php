@@ -284,12 +284,10 @@ class GeoService {
                 $county->fill($data)->save();
 
                 // Dispatch a per-county async job to fetch the boundary
-                // polygon via Nominatim /lookup. The job self-skips when the
-                // row already carries a polygon.
-                $osmType = strtoupper(substr((string)($element['type'] ?? ''), 0, 1));
-                $osmId   = (string)($element['id'] ?? '');
-                if ($osmType && $osmId !== '') {
-                    EnrichCountyBoundaryJob::dispatch($county->code, $osmType . $osmId);
+                // polygon via Nominatim /lookup. The job reads osm_id from
+                // the row and self-skips when a polygon is already stored.
+                if ($county->osm_id) {
+                    EnrichCountyBoundaryJob::dispatch($county->code);
                 }
             }
         } catch (\Throwable $e) {

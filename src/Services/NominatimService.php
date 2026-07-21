@@ -506,9 +506,17 @@ class NominatimService {
             $code = strtoupper($countryCode) . '-' . strtoupper(Str::slug($name, ''));
         }
 
+        // OSM object id prefixed with the type letter (N/W/R), matching the
+        // format Nominatim /lookup expects for its `osm_ids` parameter.
+        $osmType = strtoupper(substr((string)($element['type'] ?? ''), 0, 1));
+        $osmId   = $osmType !== '' && ($element['id'] ?? null) !== null
+            ? $osmType . (string)$element['id']
+            : null;
+
         return array_filter([
             'code' => $code,
             'country_code' => strtoupper($countryCode),
+            'osm_id' => $osmId,
             'name' => $name,
             'fips' => $tags['fips_code'] ?? $tags['fips'] ?? null,
             'wiki_data_id' => $tags['wikidata'] ?? null,

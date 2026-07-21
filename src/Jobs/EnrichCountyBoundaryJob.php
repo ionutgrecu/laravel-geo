@@ -15,7 +15,6 @@ class EnrichCountyBoundaryJob implements ShouldQueue {
 
     public function __construct(
         public string $countyCode,
-        public string $osmId,
     ) {}
 
     public function handle(NominatimService $nominatim): void {
@@ -29,7 +28,11 @@ class EnrichCountyBoundaryJob implements ShouldQueue {
             return;
         }
 
-        $geometry = $nominatim->nominatimLookupPolygon($this->osmId);
+        if (!$county->osm_id) {
+            return;
+        }
+
+        $geometry = $nominatim->nominatimLookupPolygon($county->osm_id);
         if ($geometry) {
             $county->polygon = json_encode($geometry);
             $county->save();

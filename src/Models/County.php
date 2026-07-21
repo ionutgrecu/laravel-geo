@@ -15,6 +15,7 @@ use function config;
  * @property int id
  * @property string country_code
  * @property string code
+ * @property string osm_id
  * @property string name
  * @property string fips
  * @property string wiki_data_id
