@@ -11,6 +11,7 @@ use function config;
  * @property int id
  * @property string city_code
  * @property string|null code
+ * @property string|null osm_id
  * @property string|null name
  * @property string wiki_data_id
  * @property string|null type

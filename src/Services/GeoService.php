@@ -9,6 +9,7 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
 use Ionutgrecu\LaravelGeo\Jobs\EnrichCityBoundaryJob;
 use Ionutgrecu\LaravelGeo\Jobs\EnrichCountyBoundaryJob;
+use Ionutgrecu\LaravelGeo\Jobs\EnrichNeighborhoodBoundaryJob;
 use Ionutgrecu\LaravelGeo\Models\City;
 use Ionutgrecu\LaravelGeo\Models\Country;
 use Ionutgrecu\LaravelGeo\Models\County;
@@ -276,6 +277,14 @@ class GeoService {
                     if (empty($data['code']) || empty($data['name']))
                         continue;
 
+                    // The polygon is intentionally NOT set here. Overpass
+                    // `out center tags` returns no geometry for ways/relations
+                    // and only a Point for nodes; the queued
+                    // EnrichNeighborhoodBoundaryJob fetches the detailed
+                    // boundary polygon from Nominatim /lookup by osm_id, so
+                    // leave `polygon` empty for the job to fill.
+                    unset($data['polygon']);
+
                     // Look up an existing row by (name, city_code) OR code OR
                     // wiki_data_id, so a neighborhood re-arriving with a
                     // different OSM code (e.g. node -> relation) still hits its
@@ -321,6 +330,14 @@ class GeoService {
                         $data['code'] ?? null,
                     );
                     $neighborhood->save();
+
+                    // Dispatch a per-neighborhood async job to fetch the
+                    // boundary polygon via Nominatim /lookup. The job reads
+                    // osm_id from the row and self-skips when a polygon is
+                    // already stored.
+                    if (!empty($neighborhood->osm_id)) {
+                        EnrichNeighborhoodBoundaryJob::dispatch($neighborhood->code);
+                    }
                 }
             }
 

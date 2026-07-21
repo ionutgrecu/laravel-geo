@@ -660,11 +660,16 @@ class NominatimService {
         if (!$code)
             $code = $wikiDataId;
 
-        if (!$code) {
-            $osmType = $element['type'] ?? '';
-            $osmId   = (string)($element['id'] ?? '');
-            $code    = strtoupper(substr($osmType, 0, 1)) . $osmId;
-        }
+        // OSM id (type-prefixed, e.g. "R1466586") is always derived so the
+        // queued EnrichNeighborhoodBoundaryJob can call Nominatim /lookup
+        // by osm_id regardless of which value `code` ended up with
+        // (wikidata vs OSM-prefixed). Empty when the element has no id.
+        $osmType  = $element['type'] ?? '';
+        $osmIdRaw = (string)($element['id'] ?? '');
+        $osmIdKey = $osmIdRaw !== '' ? strtoupper(substr($osmType, 0, 1)) . $osmIdRaw : null;
+
+        if (!$code)
+            $code = $osmIdKey;
 
         $lat = $element['lat'] ?? $element['center']['lat'] ?? null;
         $lon = $element['lon'] ?? $element['center']['lon'] ?? null;
@@ -684,6 +689,7 @@ class NominatimService {
         return array_filter([
             'city_code' => $cityCode,
             'code' => $code,
+            'osm_id' => $osmIdKey,
             'name' => $name,
             'wiki_data_id' => $wikiDataId,
             'type' => $placeType,
