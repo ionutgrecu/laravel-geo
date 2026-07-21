@@ -13,6 +13,8 @@ use function config;
  * @property string|null code
  * @property string|null name
  * @property string wiki_data_id
+ * @property string|null type
+ * @property int|null place_rank
  * @property string latitude
  * @property string longitude
  * @property string polygon

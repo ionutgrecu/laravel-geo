@@ -593,6 +593,8 @@ class NominatimService {
             'code' => $code,
             'name' => $result['name'] ?? null,
             'wiki_data_id' => $wikiDataId,
+            'type' => $result['addresstype'] ?? $result['type'] ?? null,
+            'place_rank' => $result['place_rank'] ?? null,
             'latitude' => $result['lat'] ?? null,
             'longitude' => $result['lon'] ?? null,
             'polygon' => isset($result['geojson']) ? json_encode($result['geojson']) : null,
@@ -669,11 +671,23 @@ class NominatimService {
 
         $geojson = $this->convertOverpassGeometryToGeoJSON($element);
 
+        $placeType = $tags['place'] ?? null;
+        $placeRank = match ($placeType) {
+            'neighbourhood' => 30,
+            'quarter'       => 25,
+            'suburb'         => 20,
+            'city_block'     => 20,
+            'district'       => 14,
+            default          => null,
+        };
+
         return array_filter([
             'city_code' => $cityCode,
             'code' => $code,
             'name' => $name,
             'wiki_data_id' => $wikiDataId,
+            'type' => $placeType,
+            'place_rank' => $placeRank,
             'latitude' => $lat,
             'longitude' => $lon,
             'polygon' => $geojson ? json_encode($geojson) : null,
