@@ -4,7 +4,9 @@ namespace Ionutgrecu\LaravelGeo\Services;
 
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Collection;
+use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Schema;
 use Ionutgrecu\LaravelGeo\Jobs\EnrichCityBoundaryJob;
 use Ionutgrecu\LaravelGeo\Jobs\EnrichCountyBoundaryJob;
 use Ionutgrecu\LaravelGeo\Models\City;
@@ -12,6 +14,7 @@ use Ionutgrecu\LaravelGeo\Models\Country;
 use Ionutgrecu\LaravelGeo\Models\County;
 use Ionutgrecu\LaravelGeo\Models\Neighborhood;
 use Ionutgrecu\LaravelGeo\Models\Region;
+use function dd;
 
 /**
  * Class GeoService
@@ -22,9 +25,29 @@ class GeoService {
     protected JsonLocationsService $jsonLocationsService;
     protected NominatimService     $nominatimService;
 
+    /** @var array<string, string[]> Cached column lists (minus polygon) per connection.table */
+    private static array $columnsCache = [];
+
     public function __construct() {
         $this->jsonLocationsService = app(JsonLocationsService::class);
         $this->nominatimService     = app(NominatimService::class);
+    }
+
+    /**
+     * Return all columns of the model's table except `polygon`.
+     * Cached per connection+table to avoid repeated schema introspection.
+     */
+    protected function columnsExceptPolygon(Model $model): array {
+        $connection = $model->getConnectionName();
+        $table      = $model->getTable();
+        $key        = ($connection ?? '') . '.' . $table;
+
+        if (!isset(self::$columnsCache[$key])) {
+            $columns = Schema::connection($connection)->getColumnListing($table);
+            self::$columnsCache[$key] = array_values(array_diff($columns, ['polygon']));
+        }
+
+        return self::$columnsCache[$key];
     }
 
     /**
@@ -123,57 +146,89 @@ class GeoService {
         return $regionQueryBuilder->get();
     }
 
-    function getCountries(bool $includeCounties = false, bool $online = true): Collection {
-        $countryQueryBuilder = Country::query();
-
-        if ($includeCounties)
-            $countryQueryBuilder->with('counties');
-
-        $results = $countryQueryBuilder->get();
+    function getCountries(bool $includeCounties = false, bool $includePolygon = true, bool $online = true): Collection {
+        $results = $this->buildCountriesQuery($includeCounties, $includePolygon)->get();
 
         if ($results->isEmpty() && $online) {
             $this->fetchCountriesFromNominatim();
-
-            $countryQueryBuilder = Country::query();
-            if ($includeCounties)
-                $countryQueryBuilder->with('counties');
-            $results = $countryQueryBuilder->get();
+            $results = $this->buildCountriesQuery($includeCounties, $includePolygon)->get();
         }
 
         return $results;
     }
 
-    function getCountriesByRegion(string $regionCode, bool $includeCounties = false): Collection {
-        $query = Country::query()->where('region_code', $regionCode)->orderBy('name', 'ASC');
+    protected function buildCountriesQuery(bool $includeCounties, bool $includePolygon) {
+        $query = Country::query();
+
+        if (!$includePolygon)
+            $query->select($this->columnsExceptPolygon(new Country()));
 
         if ($includeCounties)
-            $query->with('counties');
+            $query->with(['counties' => function ($q) use ($includePolygon) {
+                if (!$includePolygon)
+                    $q->select($this->columnsExceptPolygon(new County()));
+            }]);
+
+        return $query;
+    }
+
+    function getCountriesByRegion(string $regionCode, bool $includeCounties = false, bool $includePolygon = true): Collection {
+        $query = Country::query()->where('region_code', $regionCode)->orderBy('name', 'ASC');
+
+        if (!$includePolygon)
+            $query->select($this->columnsExceptPolygon(new Country()));
+
+        if ($includeCounties)
+            $query->with(['counties' => function ($q) use ($includePolygon) {
+                if (!$includePolygon)
+                    $q->select($this->columnsExceptPolygon(new County()));
+            }]);
 
         return $query->get();
     }
 
-    function getCounties(string $countryCode, bool $includeCities = false, bool $online = true): Collection {
-        $countyQueryBuilder = County::query()->where('country_code', $countryCode)->orderBy('name', 'ASC');
-
-        if ($includeCities)
-            $countyQueryBuilder->with('cities');
-
-        $results = $countyQueryBuilder->get();
+    function getCounties(string $countryCode, bool $includeCities = false, bool $includePolygon = true, bool $online = true): Collection {
+        $results = $this->buildCountiesQuery($countryCode, $includeCities, $includePolygon)->get();
 
         if ($results->isEmpty() && $online) {
             $this->fetchCountiesFromNominatim($countryCode);
-
-            $countyQueryBuilder = County::query()->where('country_code', $countryCode)->orderBy('name', 'ASC');
-            if ($includeCities)
-                $countyQueryBuilder->with('cities');
-            $results = $countyQueryBuilder->get();
+            $results = $this->buildCountiesQuery($countryCode, $includeCities, $includePolygon)->get();
         }
 
         return $results;
     }
 
-    function getCities(?string $countyCode = null, ?string $countryCode = null, bool $online = true): Collection {
+    protected function buildCountiesQuery(string $countryCode, bool $includeCities, bool $includePolygon) {
+        $query = County::query()->where('country_code', $countryCode)->orderBy('name', 'ASC');
+
+        if (!$includePolygon)
+            $query->select($this->columnsExceptPolygon(new County()));
+
+        if ($includeCities)
+            $query->with(['cities' => function ($q) use ($includePolygon) {
+                if (!$includePolygon)
+                    $q->select($this->columnsExceptPolygon(new City()));
+            }]);
+
+        return $query;
+    }
+
+    function getCities(?string $countyCode = null, ?string $countryCode = null, bool $includePolygon = true, bool $online = true): Collection {
         $query = City::query()->orderBy('name', 'ASC');
+
+        if (!$includePolygon) {
+            $query->select($this->columnsExceptPolygon(new City()));
+            // Override the City::withCounty and County::withCountry global scopes
+            // so the eager-loaded county / country also skip the polygon column.
+            $query->withoutGlobalScope('withCounty');
+            $query->with(['county' => function ($q) {
+                $q->select($this->columnsExceptPolygon(new County()));
+                $q->withoutGlobalScope('withCountry');
+                $q->with(['country' => function ($q2) {
+                    $q2->select($this->columnsExceptPolygon(new Country()));
+                }]);
+            }]);
+        }
 
         if ($countyCode) {
             $query->where('county_code', $countyCode);
