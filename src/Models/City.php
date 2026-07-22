@@ -29,6 +29,10 @@ use Ionutgrecu\LaravelGeo\Builders\CityQueryBuilder;
 class City extends Model {
     protected $guarded = ['id', 'created_at'];
 
+    protected $hidden = [
+        'polygon',
+    ];
+
     public function __construct(array $attributes = []) {
         $this->setConnection(config('geo.database_connection'));
         $this->setTable(config('geo.table_prefix') . 'cities');

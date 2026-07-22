@@ -15,14 +15,20 @@ use function config;
  * @property int id
  * @property string country_code
  * @property string code
+ * @property string osm_id
  * @property string name
  * @property string fips
  * @property string wiki_data_id
+ * @property string polygon
  * @property string created_at
  * @property string updated_at
  */
 class County extends Model {
     protected $guarded = ['id', 'created_at'];
+
+    protected $hidden = [
+        'polygon',
+    ];
 
     public function newEloquentBuilder($query) {
         return new CountyQueryBuilder($query);

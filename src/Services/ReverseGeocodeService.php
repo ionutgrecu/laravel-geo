@@ -403,7 +403,7 @@ class ReverseGeocodeService {
 	}
 
 	protected function cacheTtlDays(): int {
-		return max(1, (int) config('geo.nominatim.cache_ttl_days', 30));
+		return max(1, (int) config('geo.nominatim.cache_ttl_days', 365));
 	}
 
 	protected function email(): ?string {

@@ -10,11 +10,12 @@ return [
         'email'         => env('GEO_NOMINATIM_EMAIL', ''),
         'rate_limit_ms' => env('GEO_NOMINATIM_RATE_LIMIT_MS', 1100),
         'timeout'       => env('GEO_NOMINATIM_TIMEOUT', 30),
-        'cache_ttl_days' => env('GEO_NOMINATIM_CACHE_TTL_DAYS', 30),
+        'cache_ttl_days' => env('GEO_NOMINATIM_CACHE_TTL_DAYS', 365),
     ],
 
     'overpass' => [
-        'base_url' => env('GEO_OVERPASS_URL', 'https://overpass-api.de/api/interpreter'),
-        'timeout'  => env('GEO_OVERPASS_TIMEOUT', 60),
+        'base_url'      => env('GEO_OVERPASS_URL', 'https://overpass-api.de/api/interpreter'),
+        'timeout'       => env('GEO_OVERPASS_TIMEOUT', 180),
+        'rate_limit_ms' => env('GEO_OVERPASS_RATE_LIMIT_MS', 1500),
     ],
 ];
