@@ -32,6 +32,10 @@ use function config;
 class Country extends Model {
     protected $guarded = ['id', 'created_at'];
 
+    protected $hidden = [
+        'polygon',
+    ];
+
     protected $casts = [
         'languages' => 'array',
     ];

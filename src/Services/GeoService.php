@@ -142,12 +142,16 @@ class GeoService {
         $regionQueryBuilder = Region::query();
 
         if ($includeCountries)
-            $regionQueryBuilder->with('countries');
+            // Countries are a relation here; per the package contract,
+            // relations never include polygon (call /geo/countries for that).
+            $regionQueryBuilder->with(['countries' => function ($q) {
+                $q->select($this->columnsExceptPolygon(new Country()));
+            }]);
 
         return $regionQueryBuilder->get();
     }
 
-    function getCountries(bool $includeCounties = false, bool $includePolygon = true, bool $online = true): Collection {
+    function getCountries(bool $includeCounties = false, bool $includePolygon = false, bool $online = true): Collection {
         $results = $this->buildCountriesQuery($includeCounties, $includePolygon)->get();
 
         if ($results->isEmpty() && $online) {
@@ -165,30 +169,31 @@ class GeoService {
             $query->select($this->columnsExceptPolygon(new Country()));
 
         if ($includeCounties)
-            $query->with(['counties' => function ($q) use ($includePolygon) {
-                if (!$includePolygon)
-                    $q->select($this->columnsExceptPolygon(new County()));
+            // Counties are an eager-loaded relation: never include polygon,
+            // regardless of $includePolygon (the flag only governs the
+            // primary resource of the endpoint).
+            $query->with(['counties' => function ($q) {
+                $q->select($this->columnsExceptPolygon(new County()));
             }]);
 
         return $query;
     }
 
-    function getCountriesByRegion(string $regionCode, bool $includeCounties = false, bool $includePolygon = true): Collection {
+    function getCountriesByRegion(string $regionCode, bool $includeCounties = false, bool $includePolygon = false): Collection {
         $query = Country::query()->where('region_code', $regionCode)->orderBy('name', 'ASC');
 
         if (!$includePolygon)
             $query->select($this->columnsExceptPolygon(new Country()));
 
         if ($includeCounties)
-            $query->with(['counties' => function ($q) use ($includePolygon) {
-                if (!$includePolygon)
-                    $q->select($this->columnsExceptPolygon(new County()));
+            $query->with(['counties' => function ($q) {
+                $q->select($this->columnsExceptPolygon(new County()));
             }]);
 
         return $query->get();
     }
 
-    function getCounties(string $countryCode, bool $includeCities = false, bool $includePolygon = true, bool $online = true): Collection {
+    function getCounties(string $countryCode, bool $includeCities = false, bool $includePolygon = false, bool $online = true): Collection {
         $results = $this->buildCountiesQuery($countryCode, $includeCities, $includePolygon)->get();
 
         if ($results->isEmpty() && $online) {
@@ -206,30 +211,32 @@ class GeoService {
             $query->select($this->columnsExceptPolygon(new County()));
 
         if ($includeCities)
-            $query->with(['cities' => function ($q) use ($includePolygon) {
-                if (!$includePolygon)
-                    $q->select($this->columnsExceptPolygon(new City()));
+            // Cities are an eager-loaded relation: never include polygon.
+            $query->with(['cities' => function ($q) {
+                $q->select($this->columnsExceptPolygon(new City()));
             }]);
 
         return $query;
     }
 
-    function getCities(?string $countyCode = null, ?string $countryCode = null, bool $includePolygon = true, bool $online = true): Collection {
+    function getCities(?string $countyCode = null, ?string $countryCode = null, bool $includePolygon = false, bool $online = true): Collection {
         $query = City::query()->orderBy('name', 'ASC');
 
         if (!$includePolygon) {
             $query->select($this->columnsExceptPolygon(new City()));
-            // Override the City::withCounty and County::withCountry global scopes
-            // so the eager-loaded county / country also skip the polygon column.
-            $query->withoutGlobalScope('withCounty');
-            $query->with(['county' => function ($q) {
-                $q->select($this->columnsExceptPolygon(new County()));
-                $q->withoutGlobalScope('withCountry');
-                $q->with(['country' => function ($q2) {
-                    $q2->select($this->columnsExceptPolygon(new Country()));
-                }]);
-            }]);
         }
+
+        // County and country are eager-loaded relations (via global scopes
+        // withCounty / withCountry): never include polygon. Override the
+        // scopes with explicit closures that select all-but-polygon.
+        $query->withoutGlobalScope('withCounty');
+        $query->with(['county' => function ($q) {
+            $q->select($this->columnsExceptPolygon(new County()));
+            $q->withoutGlobalScope('withCountry');
+            $q->with(['country' => function ($q2) {
+                $q2->select($this->columnsExceptPolygon(new Country()));
+            }]);
+        }]);
 
         if ($countyCode) {
             $query->where('county_code', $countyCode);
@@ -251,7 +258,7 @@ class GeoService {
         return $results;
     }
 
-    function getNeighborhoods(string $cityCode, bool $includePolygon = true, bool $online = true): ?Collection {
+    function getNeighborhoods(string $cityCode, bool $includePolygon = false, bool $online = true): ?Collection {
         $results = Neighborhood::query()
             ->when(!$includePolygon, fn($q) => $q->select($this->columnsExceptPolygon(new Neighborhood())))
             ->where('city_code', $cityCode)

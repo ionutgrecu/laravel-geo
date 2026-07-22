@@ -26,6 +26,10 @@ use function config;
 class County extends Model {
     protected $guarded = ['id', 'created_at'];
 
+    protected $hidden = [
+        'polygon',
+    ];
+
     public function newEloquentBuilder($query) {
         return new CountyQueryBuilder($query);
     }
