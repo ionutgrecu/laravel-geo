@@ -2,7 +2,6 @@
 
 namespace Ionutgrecu\LaravelGeo\Services;
 
-use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\Log;
@@ -15,7 +14,6 @@ use Ionutgrecu\LaravelGeo\Models\Country;
 use Ionutgrecu\LaravelGeo\Models\County;
 use Ionutgrecu\LaravelGeo\Models\Neighborhood;
 use Ionutgrecu\LaravelGeo\Models\Region;
-use function dd;
 
 /**
  * Class GeoService
@@ -44,7 +42,7 @@ class GeoService {
         $key        = ($connection ?? '') . '.' . $table;
 
         if (!isset(self::$columnsCache[$key])) {
-            $columns = Schema::connection($connection)->getColumnListing($table);
+            $columns                  = Schema::connection($connection)->getColumnListing($table);
             self::$columnsCache[$key] = array_values(array_diff($columns, ['polygon']));
         }
 
@@ -259,6 +257,10 @@ class GeoService {
     }
 
     function getNeighborhoods(string $cityCode, bool $includePolygon = false, bool $online = true): ?Collection {
+        $city = City::where('code', 'LIKE', $cityCode)->first();
+        if (!$city)
+            return null;
+
         $results = Neighborhood::query()
             ->when(!$includePolygon, fn($q) => $q->select($this->columnsExceptPolygon(new Neighborhood())))
             ->where('city_code', $cityCode)
@@ -306,7 +308,7 @@ class GeoService {
                     if (!empty($data['wiki_data_id'])) {
                         $query->orWhere(function ($q) use ($data) {
                             $q->whereNotNull('wiki_data_id')
-                              ->where('wiki_data_id', $data['wiki_data_id']);
+                                ->where('wiki_data_id', $data['wiki_data_id']);
                         });
                     }
 
@@ -397,9 +399,9 @@ class GeoService {
 
                 $county = County::firstOrNew(['code' => $countryCode]);
                 $county->fill([
-                    'country_code'  => $countryCode,
-                    'name'          => $country->name,
-                    'wiki_data_id'  => $country->wiki_data_id,
+                    'country_code' => $countryCode,
+                    'name' => $country->name,
+                    'wiki_data_id' => $country->wiki_data_id,
                 ])->save();
 
                 return $county;
@@ -487,13 +489,13 @@ class GeoService {
                     if ($countyCode) {
                         $query->where(function ($q) use ($data, $countyCode) {
                             $q->where('name', $data['name'])
-                              ->where('county_code', $countyCode);
+                                ->where('county_code', $countyCode);
                         })->orWhere('code', $data['code']);
 
                         if (!empty($data['wiki_data_id'])) {
                             $query->orWhere(function ($q) use ($data) {
                                 $q->whereNotNull('wiki_data_id')
-                                  ->where('wiki_data_id', $data['wiki_data_id']);
+                                    ->where('wiki_data_id', $data['wiki_data_id']);
                             });
                         }
                     } else {
@@ -502,7 +504,7 @@ class GeoService {
                         if (!empty($data['wiki_data_id'])) {
                             $query->orWhere(function ($q) use ($data) {
                                 $q->whereNotNull('wiki_data_id')
-                                  ->where('wiki_data_id', $data['wiki_data_id']);
+                                    ->where('wiki_data_id', $data['wiki_data_id']);
                             });
                         }
                     }
@@ -565,7 +567,7 @@ class GeoService {
                 $city->fill($data)->save();
             }
         } catch (\Throwable $e) {
-            Log::warning("Nominatim fetch failed for cities: " . $e->getMessage(),['trace'=>$e->getTraceAsString()]);
+            Log::warning("Nominatim fetch failed for cities: " . $e->getMessage(), ['trace' => $e->getTraceAsString()]);
         }
     }
 
@@ -612,7 +614,7 @@ class GeoService {
         if (count($candidates) === 1)
             return reset($candidates);
 
-        $rank = ['N' => 0, 'R' => 1, 'W' => 2];
+        $rank         = ['N' => 0, 'R' => 1, 'W' => 2];
         $rankExisting = $rank[strtoupper(substr((string)$existing, 0, 1))] ?? 3;
         $rankIncoming = $rank[strtoupper(substr((string)$incoming, 0, 1))] ?? 3;
 
@@ -634,7 +636,7 @@ class GeoService {
         if (count($candidates) === 1)
             return reset($candidates);
 
-        $rank = ['R' => 0, 'W' => 1, 'N' => 2];
+        $rank         = ['R' => 0, 'W' => 1, 'N' => 2];
         $rankExisting = $rank[strtoupper(substr((string)$existing, 0, 1))] ?? 3;
         $rankIncoming = $rank[strtoupper(substr((string)$incoming, 0, 1))] ?? 3;
 
@@ -654,7 +656,7 @@ class GeoService {
      * untouched (we can't group them by city identity).
      */
     private function dedupOverpassCityElements(array $elements): array {
-        $rank = ['relation' => 0, 'way' => 1, 'node' => 2];
+        $rank    = ['relation' => 0, 'way' => 1, 'node' => 2];
         $byWiki  = []; // lowercased wikidata => [element, rank]
         $without = [];
 
@@ -689,7 +691,7 @@ class GeoService {
      * untouched (we can't group them by neighborhood identity).
      */
     private function dedupOverpassNeighborhoodElements(array $elements): array {
-        $rank = ['relation' => 0, 'way' => 1, 'node' => 2];
+        $rank    = ['relation' => 0, 'way' => 1, 'node' => 2];
         $byWiki  = []; // lowercased wikidata => [element, rank]
         $without = [];
 
