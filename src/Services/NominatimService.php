@@ -95,7 +95,7 @@ class NominatimService {
     }
 
     protected function request(string $endpoint, array $params = []): array {
-        $defaults = [
+        $params = [
             'format' => 'jsonv2',
             'addressdetails' => 1,
             'extratags' => 1,
@@ -372,6 +372,97 @@ class NominatimService {
         $id = $elements[0]['id'] ?? null;
 
         return $id !== null ? 'R' . (string)$id : null;
+    }
+
+    /**
+     * Reverse geocode a coordinate via Nominatim /reverse. Returns the HTTP
+     * status and decoded body. Throws GuzzleException on failure so callers
+     * can fall back to cached/stale data — mirrors the contract previously
+     * implemented inline in ReverseGeocodeService::reverseGeocodeProvider.
+     */
+    public function reverseGeocode(float $lat, float $lon, ?int $zoom = null, ?string $acceptLanguage = null): array {
+        $params = [
+            'lat' => $lat,
+            'lon' => $lon,
+            'format' => 'jsonv2',
+            'addressdetails' => 1,
+            'extratags' => 1,
+        ];
+
+        if ($zoom !== null) {
+            $params['zoom'] = $zoom;
+        }
+
+        if ($this->email) {
+            $params['email'] = $this->email;
+        }
+
+        $headers = ['Accept' => 'application/json'];
+        if ($acceptLanguage) {
+            $headers['Accept-Language'] = $acceptLanguage;
+        }
+
+        $this->throttleNominatim();
+
+        $response = $this->client->get('/reverse', [
+            'query' => $params,
+            'headers' => $headers,
+        ]);
+
+        return [
+            'status' => $response->getStatusCode(),
+            'body' => json_decode($response->getBody()->getContents(), true) ?: [],
+        ];
+    }
+
+    /**
+     * Best-effort Overpass fallback that resolves the nearest named street
+     * and house number around a coordinate. Used when Nominatim /reverse
+     * returns no street. Returns ['street' => ..., 'house_number' => ...]
+     * filtered to non-null values, or null when nothing was found.
+     */
+    public function overpassReverseStreet(float $lat, float $lon, int $radius = 50): ?array {
+        $overpassTimeout = (int) config('geo.overpass.timeout', 180);
+
+        $query = '[out:json][timeout:' . $overpassTimeout . '];'
+            . '('
+            . 'way(around:' . $radius . ',' . $lat . ',' . $lon . ')["highway"]["name"];'
+            . 'node(around:' . $radius . ',' . $lat . ',' . $lon . ')["addr:housenumber"];'
+            . ');'
+            . 'out tags center;';
+
+        $data = $this->overpassRequest($query, 'reverse street');
+
+        $elements = $data['elements'] ?? [];
+        if (empty($elements)) {
+            return null;
+        }
+
+        $street = null;
+        $houseNumber = null;
+
+        foreach ($elements as $element) {
+            $tags = $element['tags'] ?? [];
+
+            if ($street === null && !empty($tags['highway']) && !empty($tags['name'])) {
+                $street = $tags['name'];
+            }
+
+            if ($houseNumber === null && !empty($tags['addr:housenumber'])) {
+                $houseNumber = $tags['addr:housenumber'];
+            }
+
+            if ($street !== null && $houseNumber !== null) {
+                break;
+            }
+        }
+
+        $result = array_filter([
+            'street' => $street,
+            'house_number' => $houseNumber,
+        ], fn($value) => $value !== null && $value !== '');
+
+        return $result ?: null;
     }
 
     public function nominatimDetailsByPlaceId(string $placeId): array {
