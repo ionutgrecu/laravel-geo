@@ -11,9 +11,9 @@ use function config;
 /**
  * Class GeoAdministrativeEntity
  * @package Ionutgrecu\LaravelGeo\Models
- * @property string osm_id
- * @property string|null parent_osm_id
- * @property string|null country_osm_id
+ * @property string id
+ * @property string|null parent_id
+ * @property string|null country_id
  * @property string name
  * @property EntityType type
  * @property int|null admin_level
@@ -22,15 +22,20 @@ use function config;
  * @property string|null latitude
  * @property string|null longitude
  * @property array|null tags
+ * @property string|null polygon
  * @property string created_at
  * @property string updated_at
  */
 class GeoAdministrativeEntity extends Model {
-    protected $primaryKey   = 'osm_id';
+    protected $primaryKey   = 'id';
     public    $incrementing = false;
     protected $keyType      = 'string';
 
     protected $guarded = ['created_at'];
+
+    protected $hidden = [
+        'polygon',
+    ];
 
     protected $casts = [
         'tags' => 'array',
@@ -46,18 +51,18 @@ class GeoAdministrativeEntity extends Model {
     }
 
     function parent(): BelongsTo {
-        return $this->belongsTo(self::class, 'parent_osm_id', 'osm_id');
+        return $this->belongsTo(self::class, 'parent_id', 'id');
     }
 
     function country(): BelongsTo {
-        return $this->belongsTo(self::class, 'country_osm_id', 'osm_id');
+        return $this->belongsTo(self::class, 'country_id', 'id');
     }
 
     function children(): HasMany {
-        return $this->hasMany(self::class, 'parent_osm_id', 'osm_id');
+        return $this->hasMany(self::class, 'parent_id', 'id');
     }
 
     function names(): HasMany {
-        return $this->hasMany(GeoAdministrativeEntityName::class, 'osm_id', 'osm_id');
+        return $this->hasMany(GeoAdministrativeEntityName::class, 'id', 'id');
     }
 }

@@ -419,13 +419,13 @@ class GeoService {
                 $names = $continent['names'] ?? [];
                 unset($continent['names']);
 
-                if (empty($continent['osm_id']) || empty($continent['name']))
+                if (empty($continent['id']) || empty($continent['name']))
                     continue;
 
-                $osmId = $continent['osm_id'];
-                unset($continent['osm_id']); // guarded on the model — set as the firstOrNew key
+                $id = $continent['id'];
+                unset($continent['id']); // guarded on the model — set as the firstOrNew key
 
-                $entity = GeoAdministrativeEntity::firstOrNew(['osm_id' => $osmId]);
+                $entity = GeoAdministrativeEntity::firstOrNew(['id' => $id]);
                 // Only fill empty attributes, mirroring the "never overwrite"
                 // convention used in fetchCitiesFromNominatim.
                 foreach ($continent as $key => $value) {
@@ -438,7 +438,7 @@ class GeoService {
                 foreach ($names as $n) {
                     if (empty($n['language']) || empty($n['name']))
                         continue;
-                    GeoAdministrativeEntityName::upsertName($osmId, $n['language'], $n['name']);
+                    GeoAdministrativeEntityName::upsertName($id, $n['language'], $n['name']);
                 }
             }
         } catch (\Throwable $e) {

@@ -5,6 +5,11 @@ namespace Ionutgrecu\LaravelGeo\Services;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Ionutgrecu\LaravelGeo\Enums\EntityType;
+use function file_put_contents;
+use function json_encode;
+use function nl2br;
+use function str_replace;
+use function var_export;
 
 class WikidataService {
     /**
@@ -15,23 +20,70 @@ class WikidataService {
 
     /**
      * Single SPARQL request: one row per (continent, language) with the
-     * rdfs:label as ?name, plus OPTIONAL coord/population (repeated across
-     * language rows for the same continent). ORDER BY ?continent ?language
-     * so the English label usually lands first per continent.
+     * rdfs:label as ?name, plus OPTIONAL osmRelation/coord/population
+     * (repeated across language rows for the same continent). ORDER BY
+     * ?continent ?language so the English label usually lands first per
+     * continent. The OSM relation id (wdt:P402) is used as the entity id
+     * (WD-prefixed); when absent we fall back to the Wikidata Q-id
+     * (also WD-prefixed).
      */
     public function queryContinents(): array {
         $values = implode(' ', array_map(fn($qid) => "wd:{$qid}", self::CONTINENT_QIDS));
 
         $query =
-            'SELECT ?continent ?language ?name ?coord ?population WHERE {'
-          . '  VALUES ?continent { ' . $values . ' }'
-          . '  ?continent rdfs:label ?name .'
-          . '  BIND(LANG(?name) AS ?language)'
-          . '  FILTER(?language != "")'
-          . '  OPTIONAL { ?continent wdt:P625 ?coord. }'
-          . '  OPTIONAL { ?continent wdt:P1082 ?population. }'
-          . '}'
-          . 'ORDER BY ?continent ?language';
+            'SELECT ?continent ?continentLabel ?language ?name ?osmRelation ?coord ?population WHERE {
+
+  VALUES ?continent {
+    wd:Q15
+    wd:Q18
+    wd:Q46
+    wd:Q48
+    wd:Q49
+    wd:Q51
+    wd:Q538
+  }
+
+  ?continent rdfs:label ?name .
+
+  BIND(LANG(?name) AS ?language)
+
+  OPTIONAL {
+    SELECT ?continent (SAMPLE(?osm) AS ?osmRelation) WHERE {
+      VALUES ?continent {
+        wd:Q15
+        wd:Q18
+        wd:Q46
+        wd:Q48
+        wd:Q49
+        wd:Q51
+        wd:Q538
+      }
+      ?continent wdt:P402 ?osm .
+    }
+    GROUP BY ?continent
+  }
+
+  OPTIONAL {
+    ?continent wdt:P625 ?coord .
+  }
+
+  OPTIONAL {
+    SELECT ?continent (MAX(?pop) AS ?population) WHERE {
+      VALUES ?continent {
+        wd:Q15
+        wd:Q18
+        wd:Q46
+        wd:Q48
+        wd:Q49
+        wd:Q51
+        wd:Q538
+      }
+      ?continent wdt:P1082 ?pop .
+    }
+    GROUP BY ?continent
+  }
+}
+ORDER BY ?continent ?language';
 
         $data = $this->sparqlRequest($query);
 
@@ -43,14 +95,17 @@ class WikidataService {
      * every per-language rdfs:label. Returns one entry per continent:
      *
      *   [
-     *     'osm_id' => 'WDQ15', 'name' => 'Africa', 'type' => Continent,
+     *     'id' => 'WD1466586', 'name' => 'Africa', 'type' => Continent,
      *     'wikidata_id' => 'Q15', 'population' => ..., 'latitude' => ...,
      *     'longitude' => ..., 'tags' => null,
      *     'names' => [['language' => 'en', 'name' => 'Africa'], ...],
      *   ]
      *
-     * The entity `name` is the English label when present, else the first
-     * label encountered (ORDER BY puts ?continent first, so this is stable).
+     * `id` is the OSM relation id (wdt:P402) prefixed with 'WD' when
+     * present, else 'WD' + Q-id so the row is still uniquely keyed.
+     * `wikidata_id` always holds the bare Q-id. The entity `name` is the
+     * English label when present, else the first label encountered (ORDER
+     * BY puts ?continent first, so this is stable).
      *
      * @return array<int, array>
      */
@@ -75,8 +130,16 @@ class WikidataService {
                     $lat = $m[2];
                 }
 
+                // Continent id: prefer the OSM relation id (wdt:P402) prefixed
+                // with 'WD' (the Wikidata-row convention for this table), else
+                // fall back to 'WD' + Q-id so the row is still uniquely keyed.
+                $osmRelation = $binding['osmRelation']['value'] ?? null;
+                $id          = $osmRelation !== null && $osmRelation !== ''
+                    ? 'WD' . $osmRelation
+                    : 'WD' . $qid;
+
                 $byQid[$qid] = [
-                    'osm_id'      => 'WD' . $qid,
+                    'id'          => $id,
                     'wikidata_id' => $qid,
                     'type'        => EntityType::Continent,
                     'name'        => null, // prefer 'en'

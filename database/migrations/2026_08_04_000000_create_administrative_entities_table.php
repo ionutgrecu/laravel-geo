@@ -16,9 +16,9 @@ class CreateAdministrativeEntitiesTable extends Migration {
     public function up() {
         if (!Schema::connection($this->connection)->hasTable($this->table))
             Schema::connection($this->connection)->create($this->table, function (Blueprint $table) {
-                $table->string('osm_id', 32);
-                $table->string('parent_osm_id', 32)->nullable();
-                $table->string('country_osm_id', 32)->nullable();
+                $table->string('id', 32);
+                $table->string('parent_id', 32)->nullable();
+                $table->string('country_id', 32)->nullable();
                 $table->string('name', 255);
                 $table->string('type', 50);
                 $table->smallInteger('admin_level')->nullable();
@@ -29,19 +29,19 @@ class CreateAdministrativeEntitiesTable extends Migration {
                 $table->json('tags')->nullable();
                 $table->timestamps();
 
-                $table->primary('osm_id');
+                $table->primary('id');
 
-                $table->index('parent_osm_id', 'idx_geo_parent');
-                $table->index('country_osm_id', 'idx_geo_country');
+                $table->index('parent_id', 'idx_geo_parent');
+                $table->index('country_id', 'idx_geo_country');
                 $table->index('type', 'idx_geo_type');
                 $table->index('wikidata_id', 'idx_geo_wikidata');
 
                 $selfTable = $this->table;
-                $table->foreign('parent_osm_id', 'fk_geo_parent')
-                    ->references('osm_id')->on($selfTable)
+                $table->foreign('parent_id', 'fk_geo_parent')
+                    ->references('id')->on($selfTable)
                     ->onUpdate('cascade')->onDelete('cascade');
-                $table->foreign('country_osm_id', 'fk_geo_country')
-                    ->references('osm_id')->on($selfTable)
+                $table->foreign('country_id', 'fk_geo_country')
+                    ->references('id')->on($selfTable)
                     ->onUpdate('cascade')->onDelete('cascade');
             });
     }

@@ -20,7 +20,7 @@ php artisan geo:import-regions {regions? : Comma separated list of regions to im
 
 ### Administrative entities (continents, regions, …)
 
-The `geo_administrative_entities` table is a self-referential, OSM-keyed hierarchy discriminated by a `type` column. Entity kinds are defined by the `Ionutgrecu\LaravelGeo\Enums\EntityType` backed string enum (continent, region, country, state, county, city, neighborhood, …). Wikidata-sourced rows use `osm_id = 'WD' + Q-id` (e.g. `WDQ5107`) and store the bare Q-id in `wikidata_id`.
+The `geo_administrative_entities` table is a self-referential hierarchy keyed by a string `id` column and discriminated by a `type` column. Entity kinds are defined by the `Ionutgrecu\LaravelGeo\Enums\EntityType` backed string enum (continent, region, country, state, county, city, neighborhood, …). Wikidata-sourced continent rows use `id = 'WD' + OSM relation id` (wdt:P402, e.g. `WD1466586`) when available, else fall back to `'WD' + Q-id` (e.g. `WDQ5107`); the bare Q-id is stored in `wikidata_id`.
 
 Fetch the ~7 continents from the Wikidata Query Service (SPARQL) and upsert them into the table:
 

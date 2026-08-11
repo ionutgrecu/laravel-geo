@@ -17,15 +17,15 @@ class CreateAdministrativeEntityNamesTable extends Migration {
     public function up() {
         if (!Schema::connection($this->connection)->hasTable($this->table))
             Schema::connection($this->connection)->create($this->table, function (Blueprint $table) {
-                $table->string('osm_id', 32);
+                $table->string('id', 32);
                 $table->string('language', 10);
                 $table->string('name', 255);
                 $table->timestamps();
 
-                $table->primary(['osm_id', 'language']);
+                $table->primary(['id', 'language']);
 
-                $table->foreign('osm_id', 'fk_geo_name_entity')
-                    ->references('osm_id')->on((new GeoAdministrativeEntity())->getTable())
+                $table->foreign('id', 'fk_geo_name_entity')
+                    ->references('id')->on((new GeoAdministrativeEntity())->getTable())
                     ->onUpdate('cascade')->onDelete('cascade');
             });
     }
