@@ -18,4 +18,10 @@ return [
         'timeout'       => env('GEO_OVERPASS_TIMEOUT', 180),
         'rate_limit_ms' => env('GEO_OVERPASS_RATE_LIMIT_MS', 1500),
     ],
+
+    'wikidata' => [
+        'base_url'   => env('GEO_WIKIDATA_URL', 'https://query.wikidata.org/sparql'),
+        'user_agent' => env('GEO_WIKIDATA_USER_AGENT', 'laravel-geo/1.0'),
+        'timeout'    => env('GEO_WIKIDATA_TIMEOUT', 60),
+    ],
 ];

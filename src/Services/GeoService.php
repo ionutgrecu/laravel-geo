@@ -9,9 +9,12 @@ use Illuminate\Support\Facades\Schema;
 use Ionutgrecu\LaravelGeo\Jobs\EnrichCityBoundaryJob;
 use Ionutgrecu\LaravelGeo\Jobs\EnrichCountyBoundaryJob;
 use Ionutgrecu\LaravelGeo\Jobs\EnrichNeighborhoodBoundaryJob;
+use Ionutgrecu\LaravelGeo\Enums\EntityType;
 use Ionutgrecu\LaravelGeo\Models\City;
 use Ionutgrecu\LaravelGeo\Models\Country;
 use Ionutgrecu\LaravelGeo\Models\County;
+use Ionutgrecu\LaravelGeo\Models\GeoAdministrativeEntity;
+use Ionutgrecu\LaravelGeo\Models\GeoAdministrativeEntityName;
 use Ionutgrecu\LaravelGeo\Models\Neighborhood;
 use Ionutgrecu\LaravelGeo\Models\Region;
 
@@ -23,6 +26,7 @@ use Ionutgrecu\LaravelGeo\Models\Region;
 class GeoService {
     protected JsonLocationsService $jsonLocationsService;
     protected NominatimService     $nominatimService;
+    protected WikidataService      $wikidataService;
 
     /** @var array<string, string[]> Cached column lists (minus polygon) per connection.table */
     private static array $columnsCache = [];
@@ -30,6 +34,7 @@ class GeoService {
     public function __construct() {
         $this->jsonLocationsService = app(JsonLocationsService::class);
         $this->nominatimService     = app(NominatimService::class);
+        $this->wikidataService      = app(WikidataService::class);
     }
 
     /**
@@ -147,6 +152,28 @@ class GeoService {
             }]);
 
         return $regionQueryBuilder->get();
+    }
+
+    /**
+     * Return continents from geo_administrative_entities (type = EntityType::Continent).
+     * DB-first; when the table is empty and $online is true, fetch the ~7
+     * continents from the Wikidata SPARQL endpoint and upsert them, then re-query.
+     */
+    function getContinents(bool $online = true): Collection {
+        $results = GeoAdministrativeEntity::query()
+            ->where('type', EntityType::Continent->value)
+            ->orderBy('name', 'ASC')
+            ->get();
+
+        if ($results->isEmpty() && $online) {
+            $this->fetchContinentsFromWikidata();
+            $results = GeoAdministrativeEntity::query()
+                ->where('type', EntityType::Continent->value)
+                ->orderBy('name', 'ASC')
+                ->get();
+        }
+
+        return $results;
     }
 
     function getCountries(bool $includeCounties = false, bool $includePolygon = false, bool $online = true): Collection {
@@ -381,6 +408,41 @@ class GeoService {
             }
         } catch (\Throwable $e) {
             Log::warning('Nominatim fetch failed for countries: ' . $e->getMessage());
+        }
+    }
+
+    private function fetchContinentsFromWikidata(): void {
+        try {
+            $continents = $this->wikidataService->fetchContinentsWithNames();
+
+            foreach ($continents as $continent) {
+                $names = $continent['names'] ?? [];
+                unset($continent['names']);
+
+                if (empty($continent['osm_id']) || empty($continent['name']))
+                    continue;
+
+                $osmId = $continent['osm_id'];
+                unset($continent['osm_id']); // guarded on the model — set as the firstOrNew key
+
+                $entity = GeoAdministrativeEntity::firstOrNew(['osm_id' => $osmId]);
+                // Only fill empty attributes, mirroring the "never overwrite"
+                // convention used in fetchCitiesFromNominatim.
+                foreach ($continent as $key => $value) {
+                    if (empty($entity->{$key})) {
+                        $entity->{$key} = $value;
+                    }
+                }
+                $entity->save();
+
+                foreach ($names as $n) {
+                    if (empty($n['language']) || empty($n['name']))
+                        continue;
+                    GeoAdministrativeEntityName::upsertName($osmId, $n['language'], $n['name']);
+                }
+            }
+        } catch (\Throwable $e) {
+            Log::warning('Wikidata fetch failed for continents: ' . $e->getMessage());
         }
     }
 

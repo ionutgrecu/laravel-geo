@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-This is `ionutgrecu/laravel-geo`, a Laravel package providing hierarchical geo-location data (Regions > Countries > Counties > Cities > Neighborhoods) plus Nominatim-based address search and reverse geocoding services. It ships Eloquent models, migrations, JSON seed data, an artisan import command, and geocoding cache models. Supports Laravel 6–11.
+This is `ionutgrecu/laravel-geo`, a Laravel package providing hierarchical geo-location data (Regions > Countries > Counties > Cities > Neighborhoods) plus Nominatim-based address search and reverse geocoding services. It ships Eloquent models, migrations, JSON seed data, an artisan import command, and geocoding cache models. Requires PHP 8.1+; supports Laravel 9–11 (the `illuminate/support` constraint still lists 6–11, but Laravel 6–8 do not run on PHP 8.1).
 
 ## Commands
 
@@ -64,6 +64,18 @@ Static geo data lives in `data/` as JSON files:
 
 `geo:import-regions {regions?} {--c|countries}` — imports regions (and optionally countries/counties) from JSON into the database. Uses `firstOrNew` for upsert behavior.
 
+### Administrative Entities (Wikidata-sourced)
+
+`geo_administrative_entities` is a self-referential, OSM-keyed hierarchy with a `type` string column (length 50, indexed) discriminating entity kinds (continent, region, country, state, county, city, neighborhood, …). It has **no `polygon` column** — simpler than `geo_countries`/`geo_cities`. Continents are top-level (no `parent_osm_id`/`country_osm_id`).
+
+- **`GeoAdministrativeEntity`** model (`src/Models/GeoAdministrativeEntity.php`): non-incrementing string PK `osm_id`, `$guarded = ['created_at']`, `$casts` includes `'type' => EntityType::class` (enum round-trips to/from the DB as its backed string value). Self-ref `parent()`/`children()` and `country()` relations via `parent_osm_id`/`country_osm_id`.
+- **`EntityType`** enum (`src/Enums/EntityType.php`) — backed string enum, the single source of truth for entity-kind values (`Continent`, `Region`, `Country`, `State`, `Province`, `Territory`, `County`, `District`, `Department`, `Prefecture`, `Canton`, `Parish`, `Municipality`, `City`, `Town`, `Village`, `Hamlet`, `Borough`, `Suburb`, `Quarter`, `Neighborhood`). Values mirror OSM/Nominatim lowercase strings.
+- **`WikidataService`** (`src/Services/WikidataService.php`) — SPARQL client for the Wikidata Query Service (`https://query.wikidata.org/sparql`). Uses Laravel's `Http` facade (POST form-urlencoded, `Accept: application/sparql-results+json`, descriptive User-Agent required by WDQS). The continent Q-IDs are pinned in `WikidataService::CONTINENT_QIDS` (explicit list rather than `wdt:P31 wd:Q5107`, to fix the Oceania ambiguity). `queryContinents()` runs a **single SPARQL request** that returns one row per (continent, language) with `?name` (the `rdfs:label`), `?language` (`BIND(LANG(?name))`), plus OPTIONAL `?coord`/`?population` (repeated across language rows). `fetchContinentsWithNames()` groups those bindings by Q-id into one entry per continent with the entity fields plus a `names` sub-array of `[language, name]` pairs; the entity `name` is the English label when present, else the first label (ORDER BY ?continent ?language keeps the fallback stable). Config under `geo.wikidata.*` (`base_url`, `user_agent`, `timeout`).
+- **PK convention**: Wikidata-sourced rows use `osm_id = 'WD' + Q-id` (e.g. `WDQ5107`) and `wikidata_id` holds the bare Q-id (e.g. `Q5107`). This distinguishes them from OSM-sourced rows (`R{id}` prefix).
+- **Per-language names** — `geo_administrative_entity_names` (composite PK `osm_id`+`language`, `name` string(255), FK cascade) holds every `rdfs:label` for each continent. `GeoAdministrativeEntityName::upsertName($osmId, $language, $name)` is the shared idempotent upsert — it uses a DB-level `upsert()` (NOT Eloquent `firstOrNew` + `save()`, because both key columns are guarded and the composite PK has no single `$primaryKey` for save's UPDATE WHERE). Overwrites `name` + `updated_at` on conflict; `created_at` set on insert only. Both `fetchContinentsFromWikidata()` and `geo:fill-continents` call it inline while iterating the single-query result (one pass for entity + names).
+- **`GeoService::getContinents()`** — DB-first; when the table is empty and `$online` is true, fetches the ~7 continents from Wikidata via `fetchContinentsFromWikidata()` (single SPARQL request → single-pass upsert of entity rows + names), then re-queries. Upserts use `firstOrNew(['osm_id' => ...])` + fill-empty-attributes + `save()` (idempotent). Reads filter with `->where('type', EntityType::Continent->value)` (query-builder `where` does not consult model casts, so pass the scalar).
+- **`geo:fill-continents`** artisan command (`src/Console/FillContinents.php`) — forces the fill from the single Wikidata SPARQL request; single-pass upsert of entities and per-language names. Registered in `LaravelGeoServiceProvider` as `continents.fill`.
+
 ### Nominatim Geocoding Services
 
 The package provides two Nominatim-based geocoding services (separate from the existing `NominatimService`, which is a low-level Guzzle client for imports):
@@ -80,4 +92,6 @@ Both services: registered as singletons in `LaravelGeoServiceProvider`. Config v
 ### Known Issues
 
 - `CountryQueryBuilder` imports `Websea\Iqapp\Helpers\iq` but does not use it — this creates a hard dependency on the iqApp framework in the query builder.
-- `NominatimService` has leftover `dd()` debug calls in `overpassCities` and `overpassNeighborhoods` that will dump-and-die at runtime.
+- `NominatimService` has leftover `dd()` debug calls in `overpassCities` and `overpassNeighborhoods` that will dump-and-die at runtime. (The stray `dd()` in the old `overpassContinents` was removed when continents moved to Wikidata.)
+- `NominatimService` passes through arbitrary remote-API strings into the `type` column of `geo_administrative_entities` (e.g. `addresstype`, OSM `place` tags). Now that `GeoAdministrativeEntity` casts `type` to the `EntityType` enum, a passthrough value not in the enum's case set will throw `InvalidArgumentException` on model rehydrate. Follow-up: extend the enum or guard the cast for unknown passthrough values.
+- `composer.json` still advertises `illuminate/support: ^6.0|...|^11.0`, but the PHP `^8.1` requirement and the enum make Laravel 6–8 effectively unsupported.

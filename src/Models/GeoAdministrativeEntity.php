@@ -5,6 +5,7 @@ namespace Ionutgrecu\LaravelGeo\Models;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Ionutgrecu\LaravelGeo\Enums\EntityType;
 use function config;
 
 /**
@@ -14,7 +15,7 @@ use function config;
  * @property string|null parent_osm_id
  * @property string|null country_osm_id
  * @property string name
- * @property string type
+ * @property EntityType type
  * @property int|null admin_level
  * @property string|null wikidata_id
  * @property int|null population
@@ -25,16 +26,17 @@ use function config;
  * @property string updated_at
  */
 class GeoAdministrativeEntity extends Model {
-    public $incrementing = false;
+    protected $primaryKey   = 'osm_id';
+    public    $incrementing = false;
+    protected $keyType      = 'string';
 
-    protected $keyType = 'string';
-
-    protected $guarded = ['osm_id', 'created_at'];
+    protected $guarded = ['created_at'];
 
     protected $casts = [
-        'tags'        => 'array',
+        'tags' => 'array',
         'admin_level' => 'integer',
-        'population'  => 'integer',
+        'population' => 'integer',
+        'type' => EntityType::class,
     ];
 
     public function __construct(array $attributes = []) {

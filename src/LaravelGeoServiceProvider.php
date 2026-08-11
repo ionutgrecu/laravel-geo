@@ -3,11 +3,13 @@
 namespace Ionutgrecu\LaravelGeo;
 
 use Illuminate\Support\ServiceProvider;
+use Ionutgrecu\LaravelGeo\Console\FillContinents;
 use Ionutgrecu\LaravelGeo\Console\FillMissingCountryData;
 use Ionutgrecu\LaravelGeo\Console\LocationsImport;
 use Ionutgrecu\LaravelGeo\Services\AddressSearchService;
 use Ionutgrecu\LaravelGeo\Services\NominatimService;
 use Ionutgrecu\LaravelGeo\Services\ReverseGeocodeService;
+use Ionutgrecu\LaravelGeo\Services\WikidataService;
 
 class LaravelGeoServiceProvider extends ServiceProvider {
     public function register() {
@@ -25,6 +27,11 @@ class LaravelGeoServiceProvider extends ServiceProvider {
         });
         $this->commands('countries.fill-missing-data');
 
+        $this->app->singleton('continents.fill', function ($app) {
+            return new FillContinents();
+        });
+        $this->commands('continents.fill');
+
         $this->app->singleton(NominatimService::class, function ($app) {
             return new NominatimService();
         });
@@ -35,6 +42,10 @@ class LaravelGeoServiceProvider extends ServiceProvider {
 
         $this->app->singleton(ReverseGeocodeService::class, function ($app) {
             return new ReverseGeocodeService();
+        });
+
+        $this->app->singleton(WikidataService::class, function ($app) {
+            return new WikidataService();
         });
     }
 
