@@ -17,6 +17,8 @@ use function config;
  * @property string name
  * @property EntityType type
  * @property int|null admin_level
+ * @property int|null place_rank
+ * @property array|null bounding_box
  * @property string|null wikidata_id
  * @property int|null population
  * @property string|null latitude
@@ -40,6 +42,8 @@ class GeoAdministrativeEntity extends Model {
     protected $casts = [
         'tags' => 'array',
         'admin_level' => 'integer',
+        'place_rank' => 'integer',
+        'bounding_box' => 'array',
         'population' => 'integer',
         'type' => EntityType::class,
     ];

@@ -3,6 +3,7 @@
 namespace Ionutgrecu\LaravelGeo;
 
 use Illuminate\Support\ServiceProvider;
+use Ionutgrecu\LaravelGeo\Console\EnrichBoundaries;
 use Ionutgrecu\LaravelGeo\Console\FillContinents;
 use Ionutgrecu\LaravelGeo\Console\FillCountries;
 use Ionutgrecu\LaravelGeo\Console\FillMissingCountryData;
@@ -37,6 +38,11 @@ class LaravelGeoServiceProvider extends ServiceProvider {
             return new FillCountries();
         });
         $this->commands('countries.fill');
+
+        $this->app->singleton('enrich.boundaries', function ($app) {
+            return new EnrichBoundaries();
+        });
+        $this->commands('enrich.boundaries');
 
         $this->app->singleton(NominatimService::class, function ($app) {
             return new NominatimService();

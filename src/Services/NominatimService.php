@@ -9,7 +9,6 @@ use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
-use function dd;
 use function strtoupper;
 use function usleep;
 
@@ -46,7 +45,7 @@ class NominatimService {
     protected function throttleNominatim(): void {
         $this->acquireRateLimitLock(
             'laravel-geo:nominatim:throttle',
-            (int) config('geo.nominatim.rate_limit_ms', 1100),
+            (int)config('geo.nominatim.rate_limit_ms', 1100),
             60,
         );
     }
@@ -58,7 +57,7 @@ class NominatimService {
     protected function throttleOverpass(): void {
         $this->acquireRateLimitLock(
             'laravel-geo:overpass:throttle',
-            (int) config('geo.overpass.rate_limit_ms', 1500)
+            (int)config('geo.overpass.rate_limit_ms', 1500)
         );
     }
 
@@ -70,10 +69,10 @@ class NominatimService {
         // Lock auto-expires after the rate-limit window, so once we make a
         // request the next caller (this process or any other) is forced to
         // wait until the window elapses. We never release it manually.
-        $ttlSeconds    = max(1, (int) ceil($rateLimitMs / 1000));
-        $blockSeconds  = $blockSecondsOverride
-            ?? max($ttlSeconds, (int) ceil($rateLimitMs * 3 / 1000));
-        $retryDelayMs  = max(1, (int) ceil($rateLimitMs / 2));
+        $ttlSeconds   = max(1, (int)ceil($rateLimitMs / 1000));
+        $blockSeconds = $blockSecondsOverride
+            ?? max($ttlSeconds, (int)ceil($rateLimitMs * 3 / 1000));
+        $retryDelayMs = max(1, (int)ceil($rateLimitMs / 2));
 
         // Retry indefinitely on timeout. The caller prefers honoring the
         // Nominatim/Overpass rate-limit policy over returning fast, so we keep
@@ -95,7 +94,7 @@ class NominatimService {
     }
 
     protected function request(string $endpoint, array $params = []): array {
-        $params = [
+        $defaults = [
             'format' => 'jsonv2',
             'addressdetails' => 1,
             'extratags' => 1,
@@ -207,7 +206,7 @@ class NominatimService {
     }
 
     public function overpassCityBoundaryByWikiDataId(string $wikiDataId): ?array {
-        $overpassTimeout = (int) config('geo.overpass.timeout', 180);
+        $overpassTimeout = (int)config('geo.overpass.timeout', 180);
 
         $query = '[out:json][timeout:' . $overpassTimeout . '];'
             . 'relation["wikidata"="' . $wikiDataId . '"]["boundary"="administrative"];'
@@ -218,7 +217,7 @@ class NominatimService {
     }
 
     public function overpassCityBoundaryByName(string $name, string $countryCode, ?string $countyIsoCode = null): ?array {
-        $overpassTimeout = (int) config('geo.overpass.timeout', 180);
+        $overpassTimeout = (int)config('geo.overpass.timeout', 180);
 
         if ($countyIsoCode) {
             $areaFilter = 'area["ISO3166-2"="' . $countyIsoCode . '"]["boundary"="administrative"]->.searchArea;';
@@ -258,12 +257,12 @@ class NominatimService {
      * that as null/empty exactly as before.
      */
     protected function overpassRequest(string $query, string $context): ?array {
-        $overpassUrl     = (string) config('geo.overpass.base_url', 'https://overpass-api.de/api/interpreter');
-        $overpassTimeout = (int) config('geo.overpass.timeout', 180);
+        $overpassUrl     = (string)config('geo.overpass.base_url', 'https://overpass-api.de/api/interpreter');
+        $overpassTimeout = (int)config('geo.overpass.timeout', 180);
 
-        $retryable    = [429, 503, 504];
-        $maxAttempts  = 5;
-        $baseDelayMs  = 1500;
+        $retryable   = [429, 503, 504];
+        $maxAttempts = 5;
+        $baseDelayMs = 1500;
 
         for ($attempt = 1; $attempt <= $maxAttempts; $attempt++) {
             $this->throttleOverpass();
@@ -289,8 +288,8 @@ class NominatimService {
                 }
 
                 // Exponential backoff with ±25% jitter.
-                $delayMs = (int) ceil($baseDelayMs * (2 ** ($attempt - 1)));
-                $jitter  = random_int((int) (-$delayMs * 0.25), (int) ($delayMs * 0.25));
+                $delayMs = (int)ceil($baseDelayMs * (2 ** ($attempt - 1)));
+                $jitter  = random_int((int)(-$delayMs * 0.25), (int)($delayMs * 0.25));
                 $sleepMs = max(0, $delayMs + $jitter);
                 usleep($sleepMs * 1000);
 
@@ -324,20 +323,21 @@ class NominatimService {
         return $data['elements'] ?? [];
     }
 
-    /**
+    /** @deprecated
      * Look up a single OSM object (e.g. "R1466586") via Nominatim /lookup and
      * return its full polygon geometry as a GeoJSON array, or null when the
      * object has no boundary polygon or the request fails.
      */
     public function nominatimLookupPolygon(string $osmId): ?array {
-        $result = $this->request('/lookup', [
+        $params = [
             'osm_ids' => $osmId,
             'format' => 'geojson',
             'polygon_geojson' => 1,
             'addressdetails' => 0,
             'extratags' => 0,
             'namedetails' => 0,
-        ]);
+        ];
+        $result = $this->request('/lookup', $params);
 
         if (!is_array($result)) {
             return null;
@@ -349,6 +349,84 @@ class NominatimService {
     }
 
     /**
+     * Look up a single OSM object (e.g. "R90689") via Nominatim /lookup and
+     * return the first GeoJSON feature (geometry + properties), or null when
+     * the object has no boundary or the request fails. Properties include
+     * `admin_level` (string, e.g. "2" for countries) for enrichment jobs.
+     */
+    public function nominatimLookupFeature(string $osmId): ?array {
+        $params = [
+            'osm_ids' => $osmId,
+            'format' => 'jsonv2',
+            'polygon_geojson' => 1,
+            'addressdetails' => 1,
+            'extratags' => 0,
+            'namedetails' => 0,
+        ];
+        if ($this->email) {
+            $params['email'] = $this->email;
+        }
+
+        $this->throttleNominatim();
+
+        try {
+            $response = $this->client->get('/lookup', ['query' => $params]);
+            $result = json_decode($response->getBody()->getContents(), true) ?: [];
+        } catch (GuzzleException $e) {
+            Log::warning('Nominatim /lookup request failed: ' . $e->getMessage());
+            return null;
+        }
+
+        return $result[0] ?? null;
+    }
+
+    /**
+     * Fetch the OSM `admin_level` tag for a single OSM object via the Overpass
+     * API, using its Nominatim-style id (e.g. "R377733"). Returns the
+     * admin_level as an int, or null when the object has no admin_level tag
+     * or the request fails. Uses `out tags;` (no geometry) since only the
+     * tag value is needed.
+     */
+    public function overpassAdminLevel(string $osmId): ?int {
+        $prefix  = strtoupper(substr($osmId, 0, 1));
+        $numeric = substr($osmId, 1);
+        if (!in_array($prefix, ['R', 'W', 'N'], true) || !ctype_digit($numeric)) {
+            return null;
+        }
+
+        $type = match ($prefix) {
+            'R' => 'relation',
+            'W' => 'way',
+            'N' => 'node',
+        };
+
+        $overpassUrl     = (string)config('geo.overpass.base_url', 'https://overpass-api.de/api/interpreter');
+        $overpassTimeout = (int)config('geo.overpass.timeout', 180);
+
+        $query = '[out:json][timeout:' . $overpassTimeout . '];'
+            . $type . '(' . $numeric . ');'
+            . 'out tags;';
+
+        $this->throttleOverpass();
+
+        try {
+            $response = (new Client())->post($overpassUrl, [
+                'form_params' => ['data' => $query],
+                'timeout' => $overpassTimeout,
+                'headers' => ['User-Agent' => $this->userAgent],
+            ]);
+            $data = json_decode($response->getBody()->getContents(), true) ?: [];
+        } catch (GuzzleException $e) {
+            Log::warning('Overpass admin_level request failed for ' . $osmId . ': ' . $e->getMessage());
+            return null;
+        }
+
+        $adminLevel = $data['elements'][0]['tags']['admin_level'] ?? null;
+
+        return $adminLevel !== null ? (int)$adminLevel : null;
+    }
+
+    /**
      * Resolve a country's OSM relation id via the Overpass API by its ISO2
      * code, returning the id in the format Nominatim /lookup expects (e.g.
      * "R1466586"), or null when the country relation cannot be found or the
@@ -356,7 +434,7 @@ class NominatimService {
      * ISO3166-1.
      */
     public function overpassCountryOsmId(string $countryCode): ?string {
-        $overpassTimeout = (int) config('geo.overpass.timeout', 180);
+        $overpassTimeout = (int)config('geo.overpass.timeout', 180);
 
         $query = '[out:json][timeout:' . $overpassTimeout . '];'
             . 'relation["boundary"="administrative"]["admin_level"="2"]["ISO3166-1"="' . strtoupper($countryCode) . '"];'
@@ -422,7 +500,7 @@ class NominatimService {
      * filtered to non-null values, or null when nothing was found.
      */
     public function overpassReverseStreet(float $lat, float $lon, int $radius = 50): ?array {
-        $overpassTimeout = (int) config('geo.overpass.timeout', 180);
+        $overpassTimeout = (int)config('geo.overpass.timeout', 180);
 
         $query = '[out:json][timeout:' . $overpassTimeout . '];'
             . '('
@@ -438,7 +516,7 @@ class NominatimService {
             return null;
         }
 
-        $street = null;
+        $street      = null;
         $houseNumber = null;
 
         foreach ($elements as $element) {
@@ -512,7 +590,7 @@ class NominatimService {
     // --- Overpass API methods for enumeration ---
 
     public function overpassCities(string $countryCode, ?string $countyIsoCode = null): array {
-        $overpassTimeout = (int) config('geo.overpass.timeout', 180);
+        $overpassTimeout = (int)config('geo.overpass.timeout', 180);
 
         if ($countyIsoCode) {
             $areaFilter = 'area["ISO3166-2"="' . $countyIsoCode . '"]["boundary"="administrative"]->.searchArea;';
@@ -535,13 +613,13 @@ class NominatimService {
     }
 
     public function overpassCounties(string $countryCode): array {
-        $overpassTimeout = (int) config('geo.overpass.timeout', 180);
+        $overpassTimeout = (int)config('geo.overpass.timeout', 180);
 
         $areaFilter = 'area["ISO3166-1"="' . strtoupper($countryCode) . '"]["boundary"="administrative"]->.searchArea;';
 
         $query = '[out:json][timeout:' . $overpassTimeout . '];'
             . $areaFilter
-            . 'relation["boundary"="administrative"]["admin_level"~"^[4-6]$"]["ISO3166-2"~"^'.strtoupper($countryCode).'-"](area.searchArea);'
+            . 'relation["boundary"="administrative"]["admin_level"~"^[4-6]$"]["ISO3166-2"~"^' . strtoupper($countryCode) . '-"](area.searchArea);'
             . 'out center tags;';
 
         $data = $this->overpassRequest($query, 'counties');
@@ -550,7 +628,7 @@ class NominatimService {
     }
 
     public function overpassNeighborhoods(float $lat, float $lon, float $radiusKm = 10): array {
-        $overpassTimeout = (int) config('geo.overpass.timeout', 180);
+        $overpassTimeout = (int)config('geo.overpass.timeout', 180);
 
         $delta = $radiusKm * 0.009;
         $bbox  = ($lat - $delta) . ',' . ($lon - $delta) . ',' . ($lat + $delta) . ',' . ($lon + $delta);
@@ -771,10 +849,10 @@ class NominatimService {
         $placeRank = match ($placeType) {
             'neighbourhood' => 30,
             'quarter'       => 25,
-            'suburb'         => 20,
-            'city_block'     => 20,
-            'district'       => 14,
-            default          => null,
+            'suburb'        => 20,
+            'city_block'    => 20,
+            'district'      => 14,
+            default         => null,
         };
 
         return array_filter([

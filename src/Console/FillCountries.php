@@ -5,6 +5,7 @@ namespace Ionutgrecu\LaravelGeo\Console;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Log;
 use Ionutgrecu\LaravelGeo\Enums\EntityType;
+use Ionutgrecu\LaravelGeo\Jobs\EnrichAdministrativeEntityBoundaryJob;
 use Ionutgrecu\LaravelGeo\Models\GeoAdministrativeEntity;
 use Ionutgrecu\LaravelGeo\Models\GeoAdministrativeEntityName;
 use Ionutgrecu\LaravelGeo\Services\WikidataService;
@@ -76,6 +77,8 @@ class FillCountries extends Command {
                 }
                 $entity->save();
                 $filled++;
+
+                EnrichAdministrativeEntityBoundaryJob::dispatch($id);
 
                 foreach ($names as $n) {
                     if (empty($n['language']) || empty($n['name'])) {
