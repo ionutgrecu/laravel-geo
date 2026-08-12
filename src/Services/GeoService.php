@@ -176,6 +176,33 @@ class GeoService {
         return $results;
     }
 
+    /**
+     * Generic type-driven read of geo_administrative_entities. Unlike
+     * getContinents() this is DB-only (no online refill) — only continents
+     * have a Wikidata source, and that stays in getContinents().
+     *
+     * Per the package contract: relations never include polygon, regardless
+     * of $includePolygon (the flag only governs the primary resource). When
+     * $includeChildren is true, only the direct children are eager-loaded
+     * (one level); the client can re-query for deeper levels.
+     */
+    function getAdministrativeEntities(EntityType $type, bool $includeChildren = false, bool $includePolygon = false): Collection {
+        $query = GeoAdministrativeEntity::query()
+            ->where('type', $type->value)
+            ->orderBy('name', 'ASC');
+
+        if (!$includePolygon)
+            $query->select($this->columnsExceptPolygon(new GeoAdministrativeEntity()));
+
+        if ($includeChildren)
+            $query->with(['children' => function ($q) {
+                $q->select($this->columnsExceptPolygon(new GeoAdministrativeEntity()))
+                    ->orderBy('name', 'ASC');
+            }]);
+
+        return $query->get();
+    }
+
     function getCountries(bool $includeCounties = false, bool $includePolygon = false, bool $online = true): Collection {
         $results = $this->buildCountriesQuery($includeCounties, $includePolygon)->get();
 

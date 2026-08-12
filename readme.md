@@ -20,7 +20,7 @@ php artisan geo:import-regions {regions? : Comma separated list of regions to im
 
 ### Administrative entities (continents, regions, …)
 
-The `geo_administrative_entities` table is a self-referential hierarchy keyed by a string `id` column and discriminated by a `type` column. Entity kinds are defined by the `Ionutgrecu\LaravelGeo\Enums\EntityType` backed string enum (continent, region, country, state, county, city, neighborhood, …). Wikidata-sourced continent rows use `id = 'WD' + OSM relation id` (wdt:P402, e.g. `WD1466586`) when available, else fall back to `'WD' + Q-id` (e.g. `WDQ5107`); the bare Q-id is stored in `wikidata_id`.
+The `geo_administrative_entities` table is a self-referential hierarchy keyed by a string `id` column and discriminated by a `type` column. Entity kinds are defined by the `Ionutgrecu\LaravelGeo\Enums\EntityType` backed string enum (continent, region, country, state, county, city, neighborhood, …). Wikidata-sourced continent rows use `id = 'WD' + OSM relation id` (wdt:P402, e.g. `WD1466586`) when available, else fall back to `'WD' + Q-id` (e.g. `WDQ5107`); the bare Q-id is stored in `wikidata_id`. Country rows use `id = 'R' + OSM relation id` (P402, e.g. `R2202162` for France) to match the `R{id}`/`W{id}`/`N{id}` OSM/Nominatim convention (countries are OSM relations); countries without an OSM relation id are skipped.
 
 Fetch the ~7 continents from the Wikidata Query Service (SPARQL) and upsert them into the table:
 
@@ -30,10 +30,18 @@ php artisan geo:fill-continents
 
 The command is idempotent (only fills empty attributes on existing rows). `GeoService::getContinents()` reads the table first and falls back to a Wikidata SPARQL fetch when empty. Wikidata settings live under `geo.wikidata.*` (`GEO_WIKIDATA_URL`, `GEO_WIKIDATA_USER_AGENT`, `GEO_WIKIDATA_TIMEOUT`).
 
+Fetch the ~200 sovereign states (Wikidata `Q6256`) from the Wikidata Query Service (SPARQL) and upsert them into the table as `EntityType::Country` rows, with per-language names and `parent_id` linked to the matching continent (Wikidata `P30`):
+
+``` code
+php artisan geo:fill-countries
+```
+
+Run `geo:fill-continents` first so each country's `parent_id` can be resolved; when no continent row matches the country's `P30` Q-id, `parent_id` is left null. Idempotent (only fills empty attributes on existing rows).
+
 ## Todo
 - [ ] Add support for importing cities
 - [ ] Further develop the GeoService class
-- [ ] Fetch regions from Wikidata SPARQL (continents already supported)
+- [ ] Fetch regions from Wikidata SPARQL (continents and countries already supported)
 
 ## Credits
 

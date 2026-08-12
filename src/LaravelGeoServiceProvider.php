@@ -4,6 +4,7 @@ namespace Ionutgrecu\LaravelGeo;
 
 use Illuminate\Support\ServiceProvider;
 use Ionutgrecu\LaravelGeo\Console\FillContinents;
+use Ionutgrecu\LaravelGeo\Console\FillCountries;
 use Ionutgrecu\LaravelGeo\Console\FillMissingCountryData;
 use Ionutgrecu\LaravelGeo\Console\LocationsImport;
 use Ionutgrecu\LaravelGeo\Services\AddressSearchService;
@@ -31,6 +32,11 @@ class LaravelGeoServiceProvider extends ServiceProvider {
             return new FillContinents();
         });
         $this->commands('continents.fill');
+
+        $this->app->singleton('countries.fill', function ($app) {
+            return new FillCountries();
+        });
+        $this->commands('countries.fill');
 
         $this->app->singleton(NominatimService::class, function ($app) {
             return new NominatimService();
