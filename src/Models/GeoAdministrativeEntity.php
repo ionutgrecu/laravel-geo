@@ -69,4 +69,25 @@ class GeoAdministrativeEntity extends Model {
     function names(): HasMany {
         return $this->hasMany(GeoAdministrativeEntityName::class, 'id', 'id');
     }
+
+    /**
+     * Locale-aware name: prefer the names row matching app()->getLocale(),
+     * then config('app.locale'), then the static `name` column as the final
+     * fallback. Only kicks in when `names` is eager-loaded — otherwise returns
+     * the static column without triggering a lazy load.
+     */
+    public function getNameAttribute(): ?string {
+        if (!$this->relationLoaded('names')) {
+            return $this->attributes['name'] ?? null;
+        }
+
+        foreach ([app()->getLocale(), config('app.locale')] as $lang) {
+            $row = $this->names->firstWhere('language', $lang);
+            if ($row !== null) {
+                return $row->name;
+            }
+        }
+
+        return $this->attributes['name'] ?? null;
+    }
 }

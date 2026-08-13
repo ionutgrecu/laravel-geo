@@ -60,17 +60,19 @@ class WikidataService {
      * every per-language rdfs:label. Returns one entry per continent:
      *
      *   [
-     *     'id' => 'WD1466586', 'name' => 'Africa', 'type' => Continent,
+     *     'id' => 'R1466586', 'name' => 'Africa', 'type' => Continent,
      *     'wikidata_id' => 'Q15', 'population' => ..., 'latitude' => ...,
      *     'longitude' => ..., 'tags' => null,
      *     'names' => [['language' => 'en', 'name' => 'Africa'], ...],
      *   ]
      *
-     * `id` is the OSM relation id (wdt:P402) prefixed with 'WD' when
-     * present, else 'WD' + Q-id so the row is still uniquely keyed.
-     * `wikidata_id` always holds the bare Q-id. The entity `name` is the
-     * English label when present, else the first label encountered (ORDER
-     * BY puts ?continent first, so this is stable).
+     * `id` is 'R' + the OSM relation id (wdt:P402), matching the
+     * R{id}/W{id}/N{id} Nominatim convention (continents are OSM
+     * relations). When P402 is absent (currently the case for all 7
+     * continents), `id` is null and the caller resolves it via Overpass
+     * using `wikidata_id`. `wikidata_id` always holds the bare Q-id. The
+     * entity `name` is the English label when present, else the first
+     * label encountered (ORDER BY puts ?continent first, so this is stable).
      *
      * @return array<int, array>
      */
@@ -95,13 +97,14 @@ class WikidataService {
                     $lat = $m[2];
                 }
 
-                // Continent id: prefer the OSM relation id (wdt:P402) prefixed
-                // with 'WD' (the Wikidata-row convention for this table), else
-                // fall back to 'WD' + Q-id so the row is still uniquely keyed.
+                // Continent id: 'R' + the OSM relation id (wdt:P402), matching
+                // the R{id}/W{id}/N{id} Nominatim convention. When P402 is
+                // absent, `id` is null and the caller resolves it via Overpass
+                // using `wikidata_id`.
                 $osmRelation = $binding['osmRelation']['value'] ?? null;
                 $id          = $osmRelation !== null && $osmRelation !== ''
-                    ? 'WD' . $osmRelation
-                    : 'WD' . $qid;
+                    ? 'R' . $osmRelation
+                    : null;
 
                 $byQid[$qid] = [
                     'id'          => $id,

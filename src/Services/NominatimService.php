@@ -453,6 +453,38 @@ class NominatimService {
     }
 
     /**
+     * Resolve an OSM relation id from a Wikidata Q-id via the Overpass API,
+     * returning the id in the format Nominatim /lookup expects (e.g.
+     * "R1466586"), or null when no relation is tagged with that wikidata id
+     * or the request fails. Used to look up continents (and other entities)
+     * whose laravel-geo id is the WDQ… fallback form — i.e. Wikidata has no
+     * P402 (OSM relation id) for them, so we resolve the OSM relation via
+     * its `wikidata` tag instead. Uses `out tags;` (no geometry).
+     */
+    public function overpassRelationOsmIdByWikidata(string $qid): ?string {
+        if ($qid === '') {
+            return null;
+        }
+
+        $overpassTimeout = (int)config('geo.overpass.timeout', 180);
+
+        $query = '[out:json][timeout:' . $overpassTimeout . '];'
+            . 'relation["wikidata"="' . $this->escapeOverpassString($qid) . '"];'
+            . 'out tags;';
+
+        $data = $this->overpassRequest($query, 'relation by wikidata ' . $qid);
+
+        $elements = $data['elements'] ?? [];
+        if (empty($elements[0])) {
+            return null;
+        }
+
+        $id = $elements[0]['id'] ?? null;
+
+        return $id !== null ? 'R' . (string)$id : null;
+    }
+
+    /**
      * Reverse geocode a coordinate via Nominatim /reverse. Returns the HTTP
      * status and decoded body. Throws GuzzleException on failure so callers
      * can fall back to cached/stale data — mirrors the contract previously

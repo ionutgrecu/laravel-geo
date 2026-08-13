@@ -6,17 +6,20 @@ use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Log;
 use Ionutgrecu\LaravelGeo\Models\GeoAdministrativeEntity;
 use Ionutgrecu\LaravelGeo\Models\GeoAdministrativeEntityName;
+use Ionutgrecu\LaravelGeo\Services\NominatimService;
 use Ionutgrecu\LaravelGeo\Services\WikidataService;
 
 class FillContinents extends Command {
     protected $signature   = 'geo:fill-continents';
     protected $description = 'Fetch continents from Wikidata SPARQL and upsert them into geo_administrative_entities.';
 
-    protected WikidataService $wikidataService;
+    protected WikidataService  $wikidataService;
+    protected NominatimService $nominatimService;
 
     public function __construct() {
         parent::__construct();
-        $this->wikidataService = app(WikidataService::class);
+        $this->wikidataService   = app(WikidataService::class);
+        $this->nominatimService  = app(NominatimService::class);
     }
 
     public function handle(): int {
@@ -33,11 +36,19 @@ class FillContinents extends Command {
         $bar->start();
         $filled     = 0;
         $namesFilled = 0;
+        $enriched    = 0;
 
         foreach ($continents as $continent) {
             try {
                 $names = $continent['names'] ?? [];
                 unset($continent['names']);
+
+                // Continent id is 'R' + OSM relation id when Wikidata's P402
+                // yielded one; otherwise null and we resolve it via Overpass
+                // using the wikidata_id (continents currently have no P402).
+                if (empty($continent['id']) && !empty($continent['wikidata_id'])) {
+                    $continent['id'] = $this->nominatimService->overpassRelationOsmIdByWikidata($continent['wikidata_id']);
+                }
 
                 if (empty($continent['id']) || empty($continent['name'])) {
                     $bar->advance();
@@ -64,6 +75,24 @@ class FillContinents extends Command {
                     GeoAdministrativeEntityName::upsertName($id, $n['language'], $n['name']);
                     $namesFilled++;
                 }
+
+                // Inline Nominatim /lookup enrichment for bounding_box +
+                // place_rank (Nominatim/OSM concepts not in Wikidata). Skips
+                // rows that already have both fields set (idempotent re-runs).
+                // $id is already the R{id} Nominatim osm_id form.
+                if ($entity->bounding_box === null || $entity->place_rank === null) {
+                    $feature = $this->nominatimService->nominatimLookupFeature($id);
+                    if ($feature) {
+                        if ($entity->bounding_box === null && !empty($feature['boundingbox'])) {
+                            $entity->bounding_box = $feature['boundingbox'];
+                        }
+                        if ($entity->place_rank === null && !empty($feature['place_rank'])) {
+                            $entity->place_rank = (int)$feature['place_rank'];
+                        }
+                        $entity->save();
+                        $enriched++;
+                    }
+                }
             } catch (\Throwable $e) {
                 Log::warning('Failed to fill continent: ' . $e->getMessage());
                 $this->newLine();
@@ -75,7 +104,7 @@ class FillContinents extends Command {
 
         $bar->finish();
         $this->newLine(2);
-        $this->info("Done. Filled {$filled} of " . count($continents) . " continent(s), {$namesFilled} name(s).");
+        $this->info("Done. Filled {$filled} of " . count($continents) . " continent(s), {$namesFilled} name(s), {$enriched} enriched with bounding_box/place_rank.");
 
         return 0;
     }

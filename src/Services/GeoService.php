@@ -186,18 +186,28 @@ class GeoService {
      * $includeChildren is true, only the direct children are eager-loaded
      * (one level); the client can re-query for deeper levels.
      */
-    function getAdministrativeEntities(EntityType $type, bool $includeChildren = false, bool $includePolygon = false): Collection {
+    function getAdministrativeEntities(EntityType $type, bool $includeChildren = false, bool $includePolygon = false, bool $includeParent = false): Collection {
+        $langs = array_values(array_unique([app()->getLocale(), config('app.locale')]));
+
         $query = GeoAdministrativeEntity::query()
             ->where('type', $type->value)
-            ->orderBy('name', 'ASC');
+            ->orderBy('name', 'ASC')
+            ->with(['names' => fn($nq) => $nq->whereIn('language', $langs)]);
 
         if (!$includePolygon)
             $query->select($this->columnsExceptPolygon(new GeoAdministrativeEntity()));
 
         if ($includeChildren)
-            $query->with(['children' => function ($q) {
+            $query->with(['children' => function ($q) use ($langs) {
                 $q->select($this->columnsExceptPolygon(new GeoAdministrativeEntity()))
-                    ->orderBy('name', 'ASC');
+                    ->orderBy('name', 'ASC')
+                    ->with(['names' => fn($nq) => $nq->whereIn('language', $langs)]);
+            }]);
+
+        if ($includeParent)
+            $query->with(['parent' => function ($q) use ($langs) {
+                $q->select($this->columnsExceptPolygon(new GeoAdministrativeEntity()))
+                    ->with(['names' => fn($nq) => $nq->whereIn('language', $langs)]);
             }]);
 
         return $query->get();
@@ -446,6 +456,13 @@ class GeoService {
                 $names = $continent['names'] ?? [];
                 unset($continent['names']);
 
+                // Continent id is 'R' + OSM relation id when Wikidata's P402
+                // yielded one; otherwise null and we resolve it via Overpass
+                // using the wikidata_id (continents currently have no P402).
+                if (empty($continent['id']) && !empty($continent['wikidata_id'])) {
+                    $continent['id'] = $this->nominatimService->overpassRelationOsmIdByWikidata($continent['wikidata_id']);
+                }
+
                 if (empty($continent['id']) || empty($continent['name']))
                     continue;
 
@@ -466,6 +483,23 @@ class GeoService {
                     if (empty($n['language']) || empty($n['name']))
                         continue;
                     GeoAdministrativeEntityName::upsertName($id, $n['language'], $n['name']);
+                }
+
+                // Inline Nominatim /lookup enrichment for bounding_box +
+                // place_rank (Nominatim/OSM concepts not in Wikidata). Skips
+                // rows that already have both fields. $id is already the
+                // R{id} Nominatim osm_id form.
+                if ($entity->bounding_box === null || $entity->place_rank === null) {
+                    $feature = $this->nominatimService->nominatimLookupFeature($id);
+                    if ($feature) {
+                        if ($entity->bounding_box === null && !empty($feature['boundingbox'])) {
+                            $entity->bounding_box = $feature['boundingbox'];
+                        }
+                        if ($entity->place_rank === null && !empty($feature['place_rank'])) {
+                            $entity->place_rank = (int)$feature['place_rank'];
+                        }
+                        $entity->save();
+                    }
                 }
             }
         } catch (\Throwable $e) {
