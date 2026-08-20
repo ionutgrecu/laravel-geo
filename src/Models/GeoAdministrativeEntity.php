@@ -18,6 +18,7 @@ use function config;
  * @property EntityType type
  * @property int|null admin_level
  * @property int|null place_rank
+ * @property bool has_no_children
  * @property array|null bounding_box
  * @property string|null wikidata_id
  * @property int|null population
@@ -43,6 +44,7 @@ class GeoAdministrativeEntity extends Model {
         'tags' => 'array',
         'admin_level' => 'integer',
         'place_rank' => 'integer',
+        'has_no_children' => 'boolean',
         'bounding_box' => 'array',
         'population' => 'integer',
         'type' => EntityType::class,

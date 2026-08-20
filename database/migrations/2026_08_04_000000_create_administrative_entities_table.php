@@ -17,8 +17,8 @@ class CreateAdministrativeEntitiesTable extends Migration {
         if (!Schema::connection($this->connection)->hasTable($this->table))
             Schema::connection($this->connection)->create($this->table, function (Blueprint $table) {
                 $table->string('id', 32);
-                $table->string('parent_id', 32)->nullable();
-                $table->string('country_id', 32)->nullable();
+                $table->string('parent_id', 32)->nullable()->index();
+                $table->string('country_id', 32)->nullable()->index();
                 $table->string('name', 255);
                 $table->string('type', 50);
                 $table->smallInteger('admin_level')->nullable();
@@ -37,12 +37,6 @@ class CreateAdministrativeEntitiesTable extends Migration {
                 $table->index('wikidata_id', 'idx_geo_wikidata');
 
                 $selfTable = $this->table;
-                $table->foreign('parent_id', 'fk_geo_parent')
-                    ->references('id')->on($selfTable)
-                    ->onUpdate('cascade')->onDelete('cascade');
-                $table->foreign('country_id', 'fk_geo_country')
-                    ->references('id')->on($selfTable)
-                    ->onUpdate('cascade')->onDelete('cascade');
             });
     }
 

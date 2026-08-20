@@ -6,6 +6,7 @@ use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
+use Ionutgrecu\LaravelGeo\Jobs\EnrichAdministrativeEntityBoundaryJob;
 use Ionutgrecu\LaravelGeo\Jobs\EnrichCityBoundaryJob;
 use Ionutgrecu\LaravelGeo\Jobs\EnrichCountyBoundaryJob;
 use Ionutgrecu\LaravelGeo\Jobs\EnrichNeighborhoodBoundaryJob;
@@ -15,6 +16,7 @@ use Ionutgrecu\LaravelGeo\Models\Country;
 use Ionutgrecu\LaravelGeo\Models\County;
 use Ionutgrecu\LaravelGeo\Models\GeoAdministrativeEntity;
 use Ionutgrecu\LaravelGeo\Models\GeoAdministrativeEntityName;
+use Ionutgrecu\LaravelGeo\Models\GeoPlaceTranslation;
 use Ionutgrecu\LaravelGeo\Models\Neighborhood;
 use Ionutgrecu\LaravelGeo\Models\Region;
 
@@ -181,18 +183,28 @@ class GeoService {
      * getContinents() this is DB-only (no online refill) — only continents
      * have a Wikidata source, and that stays in getContinents().
      *
+     * When $parentId is set, the query is scoped to direct children of that
+     * parent (parent_id = $parentId) and, on an empty DB result with $online,
+     * the next administrative level down is fetched synchronously from
+     * Overpass (see fetchChildrenFromOverpass). If Overpass yields no children
+     * the parent is marked has_no_children=true so future calls short-circuit.
+     * $type is optional when $parentId is given (the child type is discovered
+     * from Overpass admin_level); when both are null the request layer
+     * rejects the call (required_without:parent_id on `type`).
+     *
      * Per the package contract: relations never include polygon, regardless
      * of $includePolygon (the flag only governs the primary resource). When
      * $includeChildren is true, only the direct children are eager-loaded
      * (one level); the client can re-query for deeper levels.
      */
-    function getAdministrativeEntities(EntityType $type, bool $includeChildren = false, bool $includePolygon = false, bool $includeParent = false): Collection {
+    function getAdministrativeEntities(?EntityType $type = null, bool $includeChildren = false, bool $includePolygon = false, bool $includeParent = false, ?string $parentId = null, bool $online = true): Collection {
         $langs = array_values(array_unique([app()->getLocale(), config('app.locale')]));
 
         $query = GeoAdministrativeEntity::query()
-            ->where('type', $type->value)
-            ->orderBy('name', 'ASC')
-            ->with(['names' => fn($nq) => $nq->whereIn('language', $langs)]);
+            ->when($type !== null, fn($q) => $q->where('type', $type->value))
+            ->when($parentId !== null, fn($q) => $q->where('parent_id', $parentId))
+            ->with(['names' => fn($nq) => $nq->whereIn('language', $langs)])
+            ->orderBy('name', 'ASC');
 
         if (!$includePolygon)
             $query->select($this->columnsExceptPolygon(new GeoAdministrativeEntity()));
@@ -210,7 +222,22 @@ class GeoService {
                     ->with(['names' => fn($nq) => $nq->whereIn('language', $langs)]);
             }]);
 
-        return $query->get();
+        $results = $query->get();
+
+        if ($results->isEmpty() && $online && $parentId !== null) {
+            $parent = GeoAdministrativeEntity::find($parentId);
+            if ($parent && !$parent->has_no_children) {
+                $this->fetchChildrenFromOverpass($parentId);
+                $results = $query->get();
+
+                if ($results->isEmpty()) {
+                    $parent->has_no_children = true;
+                    $parent->save();
+                }
+            }
+        }
+
+        return $results;
     }
 
     function getCountries(bool $includeCounties = false, bool $includePolygon = false, bool $online = true): Collection {
@@ -504,6 +531,127 @@ class GeoService {
             }
         } catch (\Throwable $e) {
             Log::warning('Wikidata fetch failed for continents: ' . $e->getMessage());
+        }
+    }
+
+    /**
+     * Synchronously fetch the immediate administrative children of a parent
+     * entity from Overpass and upsert them into geo_administrative_entities.
+     * Mirrors the online-refill pattern of fetchCountiesFromNominatim /
+     * fetchCitiesFromNominatim: the first empty call triggers the fetch, then
+     * the caller re-queries. When Overpass yields no children the caller marks
+     * the parent has_no_children=true.
+     *
+     * "Immediate children" = relations at the smallest admin_level strictly
+     * greater than the parent's admin_level (the next level down in the OSM
+     * hierarchy). Deeper levels (grandchildren) are skipped so a later call
+     * with that child's id as parent_id fetches its own children.
+     */
+    private function fetchChildrenFromOverpass(string $parentId): void {
+        try {
+            $parent = GeoAdministrativeEntity::find($parentId);
+            if (!$parent || $parent->has_no_children) {
+                return;
+            }
+
+            // Ensure the parent has an admin_level so we can compute the next
+            // level down. Fill-empty (never overwrite) + save, mirroring the
+            // continent enrichment convention.
+            if ($parent->admin_level === null) {
+                $adminLevel = $this->nominatimService->overpassAdminLevel($parentId);
+                if ($adminLevel !== null) {
+                    $parent->admin_level = $adminLevel;
+                    $parent->save();
+                }
+            }
+
+            $elements = $this->nominatimService->overpassAdministrativeChildren($parentId);
+//            dd($elements[0]);
+            if (empty($elements)) {
+                return;
+            }
+
+            // Determine the target child admin_level: the smallest admin_level
+            // among the elements that is strictly greater than the parent's
+            // (or, if the parent has none, the smallest present). Elements at
+            // deeper levels are excluded so only the immediate next level is
+            // stored.
+            $parentLevel = $parent->admin_level;
+            $childLevels = [];
+            foreach ($elements as $element) {
+                $level = $element['tags']['admin_level'] ?? null;
+                if ($level === null) {
+                    continue;
+                }
+                $level = (int)$level;
+                if ($parentLevel !== null && $level <= $parentLevel) {
+                    continue;
+                }
+                $childLevels[] = $level;
+            }
+            if (empty($childLevels)) {
+                return;
+            }
+            $targetLevel = min($childLevels);
+
+            foreach ($elements as $element) {
+                $level = isset($element['tags']['admin_level']) ? (int)$element['tags']['admin_level'] : null;
+                if ($level !== $targetLevel) {
+                    continue;
+                }
+
+                $data = $this->nominatimService->parseOverpassAdministrativeChildElement($element, $parentId);
+                if (empty($data['id']) || empty($data['name'])) {
+                    continue;
+                }
+
+                $id = $data['id'];
+                unset($data['id']); // guarded on the model — set as the firstOrNew key
+
+                // `place` and `place_translations` are not entity columns —
+                // pull them aside before the fill-only-empty loop. `type` is
+                // authoritative when derived from the OSM `place` tag, so it
+                // overwrites rather than being subject to the fill-only-empty
+                // convention.
+                $place             = $data['place'] ?? null;
+                $placeTranslations = $data['place_translations'] ?? [];
+                unset($data['place'], $data['place_translations']);
+                $type = $data['type'] ?? null;
+                unset($data['type']);
+
+                $entity = GeoAdministrativeEntity::firstOrNew(['id' => $id]);
+                // Fill only empty attributes, mirroring the "never overwrite"
+                // convention used in fetchContinentsFromWikidata /
+                // fetchCitiesFromNominatim.
+                foreach ($data as $key => $value) {
+                    if (empty($entity->{$key})) {
+                        $entity->{$key} = $value;
+                    }
+                }
+                if ($type !== null) {
+                    $entity->type = $type;
+                }
+                $entity->save();
+
+                // Persist every `place:XX` tag into the global type-label
+                // dictionary. upsertTranslation overwrites on conflict, so
+                // re-fetches refresh stale labels automatically. Repeated
+                // writes for the same (base_name, language) across many
+                // entities are idempotent and cheap.
+                if ($place !== null) {
+                    foreach ($placeTranslations as $t) {
+                        if (!empty($t['language']) && !empty($t['translation'])) {
+                            GeoPlaceTranslation::upsertTranslation($place, $t['language'], $t['translation']);
+                        }
+                    }
+                }
+
+                // Dispatch a per-child async job for polygon / bounding_box /
+                // place_rank enrichment. The job self-skips when already set.
+                EnrichAdministrativeEntityBoundaryJob::dispatch($id);
+            }
+        } catch (\Throwable $e) {
+            Log::warning('Overpass fetch failed for children of ' . $parentId . ': ' . $e->getMessage());
         }
     }
 

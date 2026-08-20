@@ -24,4 +24,14 @@ enum EntityType: string {
     case Suburb        = 'suburb';
     case Quarter       = 'quarter';
     case Neighborhood  = 'neighborhood';
+
+    public static function getKeys(): array
+    {
+        return array_column(self::cases(), 'name');
+    }
+
+    public static function getValues(): array
+    {
+        return array_column(self::cases(), 'value');
+    }
 }

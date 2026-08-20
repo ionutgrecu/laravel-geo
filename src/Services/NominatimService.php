@@ -9,6 +9,8 @@ use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
+use Ionutgrecu\LaravelGeo\Enums\EntityType;
+use function dd;
 use function strtoupper;
 use function usleep;
 
@@ -275,7 +277,7 @@ class NominatimService {
                 ]);
 
                 $body = $response->getBody()->getContents();
-//dump($query,$body);
+
                 return json_decode($body, true) ?: [];
             } catch (GuzzleException $e) {
                 $status = ($e instanceof BadResponseException && $e->hasResponse())
@@ -483,6 +485,157 @@ class NominatimService {
 
         return $id !== null ? 'R' . (string)$id : null;
     }
+
+    /**
+     * Fetch the administrative boundary relations contained inside the area of
+     * a parent OSM object (e.g. "R377733"), returning the raw Overpass elements
+     * or [] on failure. Uses the Overpass `area(<id>)` set — for a relation the
+     * area id is `3600000000 + relationId`, for a way `2400000000 + wayId`.
+     * Nodes have no area, so a node-prefixed id returns []. The caller filters
+     * the result to the immediate next admin_level down (see
+     * GeoService::fetchChildrenFromOverpass).
+     */
+    public function overpassAdministrativeChildren(string $parentOsmId): array {
+        $prefix  = strtoupper(substr($parentOsmId, 0, 1));
+        $numeric = substr($parentOsmId, 1);
+        if (!ctype_digit($numeric)) {
+            return [];
+        }
+
+        $areaId = match ($prefix) {
+            'R' => 3600000000 + (int)$numeric,
+            'W' => 2400000000 + (int)$numeric,
+            default => null,
+        };
+        if ($areaId === null) {
+            return [];
+        }
+
+        $overpassTimeout = (int)config('geo.overpass.timeout', 180);
+
+        $query = '[out:json][timeout:' . $overpassTimeout . '];'
+            . 'area(' . $areaId . ')->.parent;'
+            . 'relation["boundary"="administrative"](area.parent);'
+            . 'out center tags;';
+
+        $data = $this->overpassRequest($query, 'administrative children of ' . $parentOsmId);
+//        dd($query,$data['elements'][1]);
+        return $data['elements'] ?? [];
+    }
+
+    /**
+     * Parse an Overpass administrative boundary element into a
+     * geo_administrative_entities row. `id` is the Nominatim/lookup form
+     * ("R{id}"), `parent_id` is the caller-supplied parent entity id. `type`
+     * is derived from the OSM `admin_level`/`place` tags; `place_rank` is
+     * intentionally left unset and populated later by
+     * EnrichAdministrativeEntityBoundaryJob from the real Nominatim lookup.
+     * Returns an empty array when the element has no name.
+     */
+    public function parseOverpassAdministrativeChildElement(array $element, string $parentId): array {
+        $tags = $element['tags'] ?? [];
+        $name = $tags['name'] ?? null;
+        if (!$name) {
+            return [];
+        }
+
+        $osmId = (string)($element['id'] ?? '');
+        $id    = $osmId !== '' ? 'R' . $osmId : null;
+
+        $adminLevel = isset($tags['admin_level']) ? (int)$tags['admin_level'] : null;
+
+        $placeTag = $tags['place'] ?? null;
+
+        $type      = null;
+        if ($placeTag !== null && isset(self::PLACE_TO_TYPE[$placeTag])) {
+            $type = self::PLACE_TO_TYPE[$placeTag];
+        } elseif ($adminLevel !== null) {
+            $type = self::ADMIN_LEVEL_TO_TYPE[$adminLevel] ?? null;
+        }
+
+        $lat = $element['center']['lat'] ?? $element['lat'] ?? null;
+        $lon = $element['center']['lon'] ?? $element['lon'] ?? null;
+
+        $wikiDataId = $tags['wikidata'] ?? null;
+
+        // Collect every `place:XX` OSM tag as a localized label for the
+        // entity's *type* (e.g. `place=county` + `place:ro=județ`). These are
+        // translations of the type word, not of the place's own name, and are
+        // persisted into the global `geo_place_translations` dictionary keyed
+        // by the `place` base value.
+        $placeTranslations = [];
+        if ($placeTag !== null) {
+            foreach ($tags as $key => $value) {
+                if (preg_match('/^place:([a-zA-Z0-9_-]+)$/', (string)$key, $m)
+                    && is_string($value) && $value !== ''
+                ) {
+                    $placeTranslations[] = ['language' => $m[1], 'translation' => $value];
+                }
+            }
+        }
+
+        $result = [
+            'id'                 => $id,
+            'parent_id'          => $parentId,
+            'name'               => $name,
+            'type'               => $type?->value,
+            'admin_level'        => $adminLevel,
+            'wikidata_id'        => $wikiDataId,
+            'latitude'           => $lat,
+            'longitude'          => $lon,
+            'population'         => isset($tags['population']) ? (int)$tags['population'] : null,
+            'place'              => $placeTag,
+            'place_translations' => $placeTranslations,
+        ];
+        return array_filter($result, fn($value) => $value !== null && $value !== '');
+    }
+
+    /** Best-effort OSM admin_level → EntityType mapping (approximate, region-dependent). */
+    private const ADMIN_LEVEL_TO_TYPE = [
+        2  => EntityType::Country,
+        3  => EntityType::State,
+        4  => EntityType::State,
+        5  => EntityType::Province,
+        6  => EntityType::County,
+        7  => EntityType::District,
+        8  => EntityType::Municipality,
+        9  => EntityType::City,
+        10 => EntityType::Borough,
+        11 => EntityType::Suburb,
+        12 => EntityType::Neighborhood,
+    ];
+
+    /**
+     * OSM `place` tag → EntityType mapping. Preferred over ADMIN_LEVEL_TO_TYPE
+     * when present, because `place` is a country-independent English-generic
+     * label (e.g. `place=county`) whereas `admin_level` numbering is
+     * country-specific (e.g. Romania tags counties at level 4, the US tags
+     * states at level 4). Includes British→American spelling normalization.
+     */
+    private const PLACE_TO_TYPE = [
+        'continent'     => EntityType::Continent,
+        'region'        => EntityType::Region,
+        'country'       => EntityType::Country,
+        'state'         => EntityType::State,
+        'province'      => EntityType::Province,
+        'territory'     => EntityType::Territory,
+        'county'        => EntityType::County,
+        'district'      => EntityType::District,
+        'department'    => EntityType::Department,
+        'prefecture'    => EntityType::Prefecture,
+        'canton'        => EntityType::Canton,
+        'parish'        => EntityType::Parish,
+        'municipality'  => EntityType::Municipality,
+        'city'          => EntityType::City,
+        'town'          => EntityType::Town,
+        'village'       => EntityType::Village,
+        'hamlet'        => EntityType::Hamlet,
+        'borough'       => EntityType::Borough,
+        'suburb'        => EntityType::Suburb,
+        'quarter'       => EntityType::Quarter,
+        'neighborhood'  => EntityType::Neighborhood,
+        'neighbourhood' => EntityType::Neighborhood,
+    ];
 
     /**
      * Reverse geocode a coordinate via Nominatim /reverse. Returns the HTTP
