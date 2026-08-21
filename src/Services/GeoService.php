@@ -6,11 +6,11 @@ use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
+use Ionutgrecu\LaravelGeo\Enums\EntityType;
 use Ionutgrecu\LaravelGeo\Jobs\EnrichAdministrativeEntityBoundaryJob;
 use Ionutgrecu\LaravelGeo\Jobs\EnrichCityBoundaryJob;
 use Ionutgrecu\LaravelGeo\Jobs\EnrichCountyBoundaryJob;
 use Ionutgrecu\LaravelGeo\Jobs\EnrichNeighborhoodBoundaryJob;
-use Ionutgrecu\LaravelGeo\Enums\EntityType;
 use Ionutgrecu\LaravelGeo\Models\City;
 use Ionutgrecu\LaravelGeo\Models\Country;
 use Ionutgrecu\LaravelGeo\Models\County;
@@ -566,39 +566,13 @@ class GeoService {
             }
 
             $elements = $this->nominatimService->overpassAdministrativeChildren($parentId);
-//            dd($elements[0]);
             if (empty($elements)) {
                 return;
             }
 
-            // Determine the target child admin_level: the smallest admin_level
-            // among the elements that is strictly greater than the parent's
-            // (or, if the parent has none, the smallest present). Elements at
-            // deeper levels are excluded so only the immediate next level is
-            // stored.
-            $parentLevel = $parent->admin_level;
-            $childLevels = [];
             foreach ($elements as $element) {
-                $level = $element['tags']['admin_level'] ?? null;
-                if ($level === null) {
+                if (empty($element['tags']['place']))
                     continue;
-                }
-                $level = (int)$level;
-                if ($parentLevel !== null && $level <= $parentLevel) {
-                    continue;
-                }
-                $childLevels[] = $level;
-            }
-            if (empty($childLevels)) {
-                return;
-            }
-            $targetLevel = min($childLevels);
-
-            foreach ($elements as $element) {
-                $level = isset($element['tags']['admin_level']) ? (int)$element['tags']['admin_level'] : null;
-                if ($level !== $targetLevel) {
-                    continue;
-                }
 
                 $data = $this->nominatimService->parseOverpassAdministrativeChildElement($element, $parentId);
                 if (empty($data['id']) || empty($data['name'])) {
@@ -651,7 +625,7 @@ class GeoService {
                 EnrichAdministrativeEntityBoundaryJob::dispatch($id);
             }
         } catch (\Throwable $e) {
-            Log::warning('Overpass fetch failed for children of ' . $parentId . ': ' . $e->getMessage());
+            Log::warning('Overpass fetch failed for children of ' . $parentId . ': ' . $e->getMessage(), $e->getTrace());
         }
     }
 
