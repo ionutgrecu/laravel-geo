@@ -186,8 +186,10 @@ class GeoService {
      * When $parentId is set, the query is scoped to direct children of that
      * parent (parent_id = $parentId) and, on an empty DB result with $online,
      * the next administrative level down is fetched synchronously from
-     * Overpass (see fetchChildrenFromOverpass). If Overpass yields no children
-     * the parent is marked has_no_children=true so future calls short-circuit.
+     * Overpass (see fetchChildrenFromOverpass). City-like parents fall back to
+     * a flat set of named urban place parts when no administrative level is
+     * available. A successful exact-area result with no candidates marks the
+     * parent has_no_children=true so future calls short-circuit.
      * $type is optional when $parentId is given (the child type is discovered
      * from Overpass admin_level); when both are null the request layer
      * rejects the call (required_without:parent_id on `type`).
@@ -229,11 +231,6 @@ class GeoService {
             if ($parent && !$parent->has_no_children) {
                 $this->fetchChildrenFromOverpass($parentId);
                 $results = $query->get();
-
-                if ($results->isEmpty()) {
-                    $parent->has_no_children = true;
-                    $parent->save();
-                }
             }
         }
 
@@ -535,22 +532,27 @@ class GeoService {
     }
 
     /**
-     * Synchronously fetch the immediate administrative children of a parent
-     * entity from Overpass and upsert them into geo_administrative_entities.
-     * Mirrors the online-refill pattern of fetchCountiesFromNominatim /
-     * fetchCitiesFromNominatim: the first empty call triggers the fetch, then
-     * the caller re-queries. When Overpass yields no children the caller marks
-     * the parent has_no_children=true.
-     *
-     * "Immediate children" = relations at the smallest admin_level strictly
-     * greater than the parent's admin_level (the next level down in the OSM
-     * hierarchy). Deeper levels (grandchildren) are skipped so a later call
-     * with that child's id as parent_id fetches its own children.
+     * Fetch strict next-level administrative children from the parent's exact
+     * Overpass area. City-like parents fall back to a flat set of contained
+     * urban place parts only when no administrative children exist.
      */
     private function fetchChildrenFromOverpass(string $parentId): void {
         try {
             $parent = GeoAdministrativeEntity::find($parentId);
             if (!$parent || $parent->has_no_children) {
+                return;
+            }
+
+            $parentType = $parent->getRawOriginal('type');
+            $includeSettlementParts = in_array($parentType, [
+                EntityType::Municipality->value,
+                EntityType::City->value,
+                EntityType::Town->value,
+                EntityType::Village->value,
+            ], true);
+
+            $fetchResult = $this->nominatimService->overpassChildCandidates($parentId, $includeSettlementParts);
+            if ($fetchResult['status'] !== NominatimService::OVERPASS_CHILD_STATUS_OK) {
                 return;
             }
 
@@ -565,17 +567,23 @@ class GeoService {
                 }
             }
 
-            $elements = $this->nominatimService->overpassAdministrativeChildren($parentId);
-            if (empty($elements)) {
+            $selection = $this->nominatimService->selectOverpassChildCandidates(
+                $fetchResult['elements'],
+                $parentId,
+                $parent->admin_level,
+                $includeSettlementParts,
+            );
+
+            if ($selection['elements'] === []) {
+                $parent->has_no_children = true;
+                $parent->save();
                 return;
             }
 
-            foreach ($elements as $element) {
-                if (empty($element['tags']['place']))
-                    continue;
-
+            $flatSettlementFallback = $selection['mode'] === 'settlement';
+            foreach ($selection['elements'] as $element) {
                 $data = $this->nominatimService->parseOverpassAdministrativeChildElement($element, $parentId);
-                if (empty($data['id']) || empty($data['name'])) {
+                if (empty($data['id']) || empty($data['name']) || empty($data['type'])) {
                     continue;
                 }
 
@@ -605,6 +613,13 @@ class GeoService {
                 if ($type !== null) {
                     $entity->type = $type;
                 }
+                if ($flatSettlementFallback) {
+                    // OSM place nodes/areas do not reliably encode their
+                    // direct parentage. Keep this fallback graph stable and
+                    // intentionally flat below the city-like parent.
+                    $entity->parent_id = $parentId;
+                    $entity->has_no_children = true;
+                }
                 $entity->save();
 
                 // Persist every `place:XX` tag into the global type-label
@@ -625,7 +640,7 @@ class GeoService {
                 EnrichAdministrativeEntityBoundaryJob::dispatch($id);
             }
         } catch (\Throwable $e) {
-            Log::warning('Overpass fetch failed for children of ' . $parentId . ': ' . $e->getMessage(), $e->getTrace());
+            Log::warning('Overpass fetch failed for children of ' . $parentId . ': ' . $e->getMessage());
         }
     }
 

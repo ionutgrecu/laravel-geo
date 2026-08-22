@@ -10,11 +10,24 @@ use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use Ionutgrecu\LaravelGeo\Enums\EntityType;
-use function dd;
+use function json_encode;
 use function strtoupper;
 use function usleep;
 
 class NominatimService {
+    public const OVERPASS_CHILD_STATUS_OK      = 'ok';
+    public const OVERPASS_CHILD_STATUS_NO_AREA = 'no_area';
+    public const OVERPASS_CHILD_STATUS_FAILED  = 'failed';
+
+    private const URBAN_CHILD_PLACE_VALUES = [
+        'district',
+        'borough',
+        'suburb',
+        'quarter',
+        'neighborhood',
+        'neighbourhood',
+    ];
+
     protected string $baseUrl;
     protected string $userAgent;
     protected string $email;
@@ -487,47 +500,169 @@ class NominatimService {
     }
 
     /**
-     * Fetch the administrative boundary relations contained inside the area of
-     * a parent OSM object (e.g. "R377733"), returning the raw Overpass elements
-     * or [] on failure. Uses the Overpass `area(<id>)` set — for a relation the
-     * area id is `3600000000 + relationId`, for a way `2400000000 + wayId`.
-     * Nodes have no area, so a node-prefixed id returns []. The caller filters
-     * the result to the immediate next admin_level down (see
-     * GeoService::fetchChildrenFromOverpass).
+     * Fetch possible child boundaries and, when requested, named urban place
+     * parts inside the exact Overpass area of a relation or closed way.
+     *
+     * The area itself is emitted first as a sentinel. This lets callers
+     * distinguish a successful empty result from an OSM object for which
+     * Overpass could not create an area; provider failures remain distinct as
+     * well, so neither condition is cached as "has no children".
+     *
+     * @return array{status: string, elements: array<int, array>}
      */
-    public function overpassAdministrativeChildren(string $parentOsmId): array {
+    public function overpassChildCandidates(string $parentOsmId, bool $includeSettlementParts = false): array {
         $prefix  = strtoupper(substr($parentOsmId, 0, 1));
         $numeric = substr($parentOsmId, 1);
-        if (!ctype_digit($numeric)) {
-            return [];
+        if (!in_array($prefix, ['R', 'W'], true) || !ctype_digit($numeric)) {
+            return [
+                'status' => self::OVERPASS_CHILD_STATUS_NO_AREA,
+                'elements' => [],
+            ];
         }
 
-        $areaId = match ($prefix) {
-            'R' => 3600000000 + (int)$numeric,
-            'W' => 2400000000 + (int)$numeric,
-            default => null,
+        $parentType = match ($prefix) {
+            'R' => 'relation',
+            'W' => 'way',
         };
-        if ($areaId === null) {
-            return [];
-        }
 
         $overpassTimeout = (int)config('geo.overpass.timeout', 180);
 
         $query = '[out:json][timeout:' . $overpassTimeout . '];'
-            . 'area(' . $areaId . ')->.parent;'
-            . 'relation["boundary"="administrative"](area.parent);'
+            . $parentType . '(' . $numeric . ')->.parent;'
+            . '.parent map_to_area->.parentArea;'
+            . '.parentArea out ids;'
+            . '('
+            . 'relation["boundary"="administrative"]["admin_level"](area.parentArea);'
+            . ($includeSettlementParts
+                ? 'nwr["place"~"^(district|borough|suburb|quarter|neighbou?rhood)$"]["name"](area.parentArea);'
+                : '')
+            . ');'
             . 'out center tags;';
 
         $data = $this->overpassRequest($query, 'administrative children of ' . $parentOsmId);
-//        dd($query,$data['elements'][1]);
-        return $data['elements'] ?? [];
+        if ($data === null) {
+            return [
+                'status' => self::OVERPASS_CHILD_STATUS_FAILED,
+                'elements' => [],
+            ];
+        }
+
+        $areaResolved = false;
+        $elements     = [];
+
+        foreach ($data['elements'] ?? [] as $element) {
+            $elementType = strtolower((string)($element['type'] ?? ''));
+            $elementId   = (string)($element['id'] ?? '');
+
+            if ($elementType === 'area'
+                || ($prefix === 'W' && $elementType === 'way' && $elementId === $numeric && empty($element['tags']))
+            ) {
+                $areaResolved = true;
+                continue;
+            }
+
+            $elements[] = $element;
+        }
+
+        return [
+            'status' => $areaResolved
+                ? self::OVERPASS_CHILD_STATUS_OK
+                : self::OVERPASS_CHILD_STATUS_NO_AREA,
+            'elements' => $areaResolved ? $elements : [],
+        ];
+    }
+
+    /**
+     * Backward-compatible administrative-only wrapper.
+     */
+    public function overpassAdministrativeChildren(string $parentOsmId): array {
+        $result = $this->overpassChildCandidates($parentOsmId);
+
+        return $result['status'] === self::OVERPASS_CHILD_STATUS_OK
+            ? $result['elements']
+            : [];
+    }
+
+    /**
+     * Prefer a strict next administrative level. If none exists and the
+     * parent is city-like, return every named urban place part as a flat
+     * fallback because OSM does not consistently encode their direct parents.
+     *
+     * @return array{mode: 'administrative'|'settlement'|null, elements: array<int, array>}
+     */
+    public function selectOverpassChildCandidates(array $elements, string $parentOsmId, ?int $parentAdminLevel, bool $allowSettlementFallback): array {
+        $administrativeByLevel = [];
+        $settlementCandidates  = [];
+
+        foreach ($elements as $element) {
+            if (!is_array($element)) {
+                continue;
+            }
+
+            $elementOsmId = $this->overpassElementId($element);
+            $tags         = $element['tags'] ?? [];
+            $name         = $tags['name'] ?? null;
+
+            if ($elementOsmId === null || $elementOsmId === $parentOsmId || !is_string($name) || trim($name) === '') {
+                continue;
+            }
+
+            $adminLevel = $tags['admin_level'] ?? null;
+            if (($tags['boundary'] ?? null) === 'administrative'
+                && $adminLevel !== null
+                && is_numeric($adminLevel)
+            ) {
+                $adminLevel = (int)$adminLevel;
+                if ($parentAdminLevel === null || $adminLevel > $parentAdminLevel) {
+                    $administrativeByLevel[$adminLevel][$elementOsmId] = $element;
+                }
+            }
+
+            $place = strtolower((string)($tags['place'] ?? ''));
+            if ($allowSettlementFallback && in_array($place, self::URBAN_CHILD_PLACE_VALUES, true)) {
+                $settlementCandidates[$elementOsmId] = $element;
+            }
+        }
+
+        if ($administrativeByLevel !== []) {
+            $targetLevel = min(array_keys($administrativeByLevel));
+
+            return [
+                'mode' => 'administrative',
+                'elements' => array_values($administrativeByLevel[$targetLevel]),
+            ];
+        }
+
+        if ($settlementCandidates !== []) {
+            return [
+                'mode' => 'settlement',
+                'elements' => array_values($settlementCandidates),
+            ];
+        }
+
+        return ['mode' => null, 'elements' => []];
+    }
+
+    private function overpassElementId(array $element): ?string {
+        $prefix = match (strtolower((string)($element['type'] ?? 'relation'))) {
+            'node' => 'N',
+            'way' => 'W',
+            'relation' => 'R',
+            default => null,
+        };
+        $numeric = (string)($element['id'] ?? '');
+
+        return $prefix !== null && ctype_digit($numeric)
+            ? $prefix . $numeric
+            : null;
     }
 
     /**
      * Parse an Overpass administrative boundary element into a
      * geo_administrative_entities row. `id` is the Nominatim/lookup form
-     * ("R{id}"), `parent_id` is the caller-supplied parent entity id. `type`
-     * is derived from the OSM `admin_level`/`place` tags; `place_rank` is
+     * ("N{id}", "W{id}", or "R{id}"), `parent_id` is the caller-supplied
+     * parent entity id. `type` is derived from the OSM `admin_level`/`place`
+     * tags; `place_rank` is
      * intentionally left unset and populated later by
      * EnrichAdministrativeEntityBoundaryJob from the real Nominatim lookup.
      * Returns an empty array when the element has no name.
@@ -539,8 +674,7 @@ class NominatimService {
             return [];
         }
 
-        $osmId = (string)($element['id'] ?? '');
-        $id    = $osmId !== '' ? 'R' . $osmId : null;
+        $id = $this->overpassElementId($element);
 
         $adminLevel = isset($tags['admin_level']) ? (int)$tags['admin_level'] : null;
 
