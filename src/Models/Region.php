@@ -35,7 +35,9 @@ class Region extends Model {
     static function setFavorite(?string $code) {
         if ($code)
             static::addGlobalScope('withFavorite', function (Builder $builder) use ($code) {
-                $builder->orderByRaw("`code` = '$code' DESC")->orderBy('name');
+                $column = $builder->getQuery()->getGrammar()->wrap($builder->getModel()->qualifyColumn('code'));
+                $builder->orderByRaw("CASE WHEN $column = ? THEN 0 ELSE 1 END ASC", [$code])
+                    ->orderBy('name');
             });
         else
             static::addGlobalScope('withFavorite', function (Builder $builder) use ($code) {
